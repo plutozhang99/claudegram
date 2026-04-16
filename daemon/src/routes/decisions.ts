@@ -11,6 +11,7 @@ import type {
   RequestId,
   SessionId,
 } from '@claudegram/shared'
+import { PERMISSION_CATEGORIES } from '@claudegram/shared'
 
 const createDecisionSchema = z.object({
   sessionId: z.string().uuid(),
@@ -28,6 +29,9 @@ const createDecisionSchema = z.object({
     .min(2)
     .max(6),
   ttlSeconds: z.number().int().min(10).max(3600).optional(),
+  // Optional — meaningful only for type:'permission'.  Bot uses this to render
+  // category-specific copy without inspecting options[].label.
+  category: z.enum(PERMISSION_CATEGORIES).optional(),
 })
 
 const uuidSchema = z.string().uuid()

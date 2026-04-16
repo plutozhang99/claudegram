@@ -4,6 +4,7 @@ import type {
   DecisionStatus,
   DecisionOption,
   DecisionType,
+  PermissionCategory,
   SessionId,
   RequestId,
   ISOTimestamp,
@@ -37,6 +38,11 @@ interface MutableDecisionBase {
   options: DecisionOption[]
   createdAt: ISOTimestamp
   expiresAt: ISOTimestamp
+  /**
+   * Permission category — only meaningful when `type === 'permission'`.
+   * Mirrors the optional field on the public Decision shape.
+   */
+  category?: PermissionCategory
 }
 
 type MutableDecision =
@@ -122,6 +128,9 @@ export class DecisionQueue {
       options: req.options,
       createdAt,
       expiresAt,
+      // Persist optional category so downstream consumers (bot rendering,
+      // analytics) don't have to reverse-engineer it from options[].label.
+      category: req.category,
       status: 'pending',
     }
 
@@ -301,6 +310,7 @@ export class DecisionQueue {
       options: m.options,
       createdAt: m.createdAt,
       expiresAt: m.expiresAt,
+      category: m.category,
       status: 'answered',
       answer: optionId,
       answeredAt,
@@ -351,6 +361,7 @@ export class DecisionQueue {
       options: m.options,
       createdAt: m.createdAt,
       expiresAt: m.expiresAt,
+      category: m.category,
       status: 'cancelled',
     }
     this.decisions.set(requestId, updated)
@@ -390,6 +401,7 @@ export class DecisionQueue {
       options: m.options,
       createdAt: m.createdAt,
       expiresAt: m.expiresAt,
+      category: m.category,
       status: 'expired',
     }
     this.decisions.set(requestId, updated)
@@ -453,6 +465,7 @@ export class DecisionQueue {
             options: m.options,
             createdAt: m.createdAt,
             expiresAt: m.expiresAt,
+            category: m.category,
             status: 'cancelled',
           }
           poller.resolve(this._toDecision(cancelledView))
@@ -473,6 +486,7 @@ export class DecisionQueue {
       options: m.options,
       createdAt: m.createdAt,
       expiresAt: m.expiresAt,
+      category: m.category,
     }
 
     // Discriminated-union narrowing — no non-null assertions needed.

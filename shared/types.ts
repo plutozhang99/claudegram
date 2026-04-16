@@ -13,6 +13,18 @@ export type DecisionStatus    = 'pending' | 'answered' | 'expired' | 'cancelled'
 export type PermissionBehavior = 'allow' | 'deny';
 export type DecisionType      = 'permission' | 'custom';
 
+// ─── Permission categories ────────────────────────────────────────────────────
+// Defined here (rather than in protocol.ts) so that the Decision and
+// CreateDecisionRequest shapes below can reference PermissionCategory without
+// creating a circular import (protocol.ts already imports from types.ts).
+//
+// `protocol.ts` re-exports these for backward compatibility — existing
+// `import { PERMISSION_CATEGORIES } from '@claudegram/shared'` keeps working
+// because `shared/index.ts` re-exports both modules.
+
+export const PERMISSION_CATEGORIES = ['file_edit', 'bash', 'mcp_tool'] as const;
+export type PermissionCategory = (typeof PERMISSION_CATEGORIES)[number];
+
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 export const DEFAULT_TTL_SECONDS = 300;
@@ -47,6 +59,12 @@ interface DecisionBase {
   options:     DecisionOption[];
   createdAt:   ISOTimestamp;
   expiresAt:   ISOTimestamp;  // unanswered expiry (DEFAULT_TTL_SECONDS after createdAt)
+  /**
+   * Permission category — only meaningful when `type === 'permission'`.
+   * Optional so that Phase F3 custom decisions (type === 'custom') can omit it.
+   * Bot uses this to render category-specific button labels and copy.
+   */
+  category?:   PermissionCategory;
 }
 
 /** Discriminated union — narrow on `status` to access answered-only fields. */
@@ -118,6 +136,13 @@ export interface CreateDecisionRequest {
   description: string;
   options:     DecisionOption[];
   ttlSeconds?: number;          // defaults to DEFAULT_TTL_SECONDS
+  /**
+   * Permission category — only meaningful when `type === 'permission'`.
+   * Persisted on the resulting Decision so that downstream consumers (bot,
+   * CLI, future analytics) can render category-specific copy without having
+   * to reverse-engineer it from `options[].label`.
+   */
+  category?:   PermissionCategory;
 }
 export interface CreateDecisionResponse {
   requestId: RequestId;

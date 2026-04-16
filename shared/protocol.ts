@@ -1,4 +1,5 @@
-import type { RequestId, Result } from './types.js'
+import type { RequestId, Result, PermissionCategory } from './types.js'
+import { PERMISSION_CATEGORIES } from './types.js'
 
 // ─── Permission option identifiers ───────────────────────────────────────────
 
@@ -6,9 +7,17 @@ export const PERMISSION_OPTION_IDS = ['yes', 'yes_all', 'no'] as const
 export type PermissionOptionId = (typeof PERMISSION_OPTION_IDS)[number]
 
 // ─── Permission categories ────────────────────────────────────────────────────
-
-export const PERMISSION_CATEGORIES = ['file_edit', 'bash', 'mcp_tool'] as const
-export type PermissionCategory = (typeof PERMISSION_CATEGORIES)[number]
+// PERMISSION_CATEGORIES / PermissionCategory live in types.ts (so that the
+// Decision shape can reference them without a circular import).  They are
+// re-exported here to preserve the previous public surface where consumers
+// imported them from this module.
+//
+// Note: `import` (not `export ... from`) is required so that the names are in
+// this module's scope and can be referenced by interfaces below
+// (PermissionNotification.category).  A bare `export { ... } from` is a
+// transit-only re-export and does not bind the name locally.
+export { PERMISSION_CATEGORIES }
+export type { PermissionCategory }
 
 // ─── Permission notification (Claude Code → channel-server) ───────────────────
 
@@ -22,10 +31,11 @@ export type PermissionCategory = (typeof PERMISSION_CATEGORIES)[number]
  * Defined here so all three phases reference a single source of truth.
  *
  * Field budgets (enforced by parsePermissionNotification at the boundary):
- *   - title       ≤  256 chars
- *   - description ≤ 4096 chars
- *   - toolName    ≤  128 chars
- *   - sessionId   ≤  128 chars
+ *   - title         ≤  256 chars
+ *   - description   ≤ 4096 chars
+ *   - toolName      ≤  128 chars
+ *   - sessionId     ≤  128 chars
+ *   - correlationId ≤  128 chars
  */
 export interface PermissionNotification {
   readonly category: PermissionCategory
@@ -33,6 +43,17 @@ export interface PermissionNotification {
   readonly description: string
   readonly toolName?: string
   readonly sessionId?: string
+  /**
+   * Opaque token supplied by Claude Code to correlate the
+   * `claude/channel/permission/result` notification back to the originating
+   * permission prompt.  When present, the channel-server echoes it verbatim
+   * in the result notification's `correlationId` field; when absent, the
+   * result still fires with `correlationId: null`.
+   *
+   * Format is intentionally unconstrained beyond the length budget — Claude
+   * Code may use a UUID, a sequence number, or any other string.
+   */
+  readonly correlationId?: string
 }
 
 // ─── Telegram callback_data encoding ─────────────────────────────────────────
