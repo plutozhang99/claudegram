@@ -9,6 +9,7 @@
   "files": [],
   "references": [
     { "path": "./shared" },
+    { "path": "./bot" },
     { "path": "./daemon" },
     { "path": "./channel-server" }
   ]

@@ -1,0 +1,15 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "composite": true,
+    "outDir": "./dist",
+    "rootDir": "./src",
+    // skipLibCheck: grammy 1.42 transitively depends on node-fetch@2, which
+    // ships no bundled types. @types/node-fetch is grammy's internal detail —
+    // we should not be forced to maintain it. Remove this flag once grammy
+    // ships a fetch-based release that drops the node-fetch dependency.
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*"],
+  "references": [{ "path": "../shared" }]
+}

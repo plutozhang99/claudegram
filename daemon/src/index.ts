@@ -1,4 +1,5 @@
 import { Hono } from 'hono'
+import { loadConfig } from './config'
 import { acquirePidLock, releasePidLock } from './pid'
 import { SessionRegistry } from './registry'
 import { DecisionQueue } from './queue'
@@ -6,7 +7,11 @@ import { createSessionRoutes } from './routes/sessions'
 import { createDecisionRoutes } from './routes/decisions'
 import type { HealthResponse, ErrorResponse } from '@claudegram/shared'
 
-const PORT = parseInt(process.env.CLAUDEGRAM_PORT ?? '3582', 10)
+// Validate environment configuration before anything else — exits with code 1 on failure
+const config = loadConfig()
+process.stderr.write('[claudegram-daemon] Config loaded\n')
+
+const PORT = config.CLAUDEGRAM_PORT
 const registry = new SessionRegistry()
 const queue = new DecisionQueue()
 

@@ -2,7 +2,7 @@
   "name": "claudegram",
   "version": "0.1.0",
   "private": true,
-  "workspaces": ["shared", "daemon", "channel-server"],
+  "workspaces": ["bot", "daemon", "channel-server", "shared"],
   "devDependencies": {
     "typescript": "^5.4.0"
   },
