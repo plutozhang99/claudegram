@@ -3,7 +3,7 @@
 ## Spec Files
 - docs/request_v1.md
 
-## Current Phase: Phase 0 — plan approved, awaiting go-ahead to start Phase 1
+## Current Phase: Phase 2 — Storage (2.1 schema+migrate, 2.2 repo types in parallel; 2.3 after both)
 
 ## Interruption Reason
 
@@ -27,18 +27,15 @@ Not activated for P0:
 - Slot 9 Clinical: N/A
 
 ## Active Task
-Plan approved. Holding before Phase 1.1 pending user green light to start coding.
+Phase 2 next: launching 2.1 (schema+migrate) and 2.2 (repo types) in parallel.
 
 ## Completed Tasks
-(none)
+- [x] **1.1** scaffold — commit: 2b3b04e — config-only, no reviews needed
+- [x] **1.2** `src/config.ts` Zod config — commit: 2b3b04e — code ✅ sec ✅ func ✅ type ✅ err ✅ — 1 round of fixes (path traversal refine, strict PORT regex, readonly)
+- [x] **1.3** `src/logger.ts` JSONL stderr — commit: 2b3b04e — code ✅ sec ✅ func ✅ type ✅ err ✅ — 1 round of fixes (safe fallback for JSON.stringify throw on circular/BigInt)
+- [x] **1.4** `src/db/client.ts` — code ✅ sec ✅ func ✅ db ✅ err ✅ — added foreign_keys PRAGMA post-write verification per silent-failure review
 
 ## Pending Tasks (prioritized)
-
-### Phase 1 — Project scaffold
-- [ ] **1.1** Initialize `current/claudegram/` package: `package.json` (`type: module`, `engines.bun`, scripts), `tsconfig.json` strict, `.gitignore`, `.bun-version`, empty `src/` tree. — depends on: none
-- [ ] **1.2** `src/config.ts` — Zod-validated env (`CLAUDEGRAM_PORT` default 8788, `CLAUDEGRAM_DB_PATH` default `./data/claudegram.db`, `CLAUDEGRAM_LOG_LEVEL` default `info`). Tests first. — depends on: 1.1 — **parallel with 1.3**
-- [ ] **1.3** `src/logger.ts` — stderr, UTC ISO timestamp (`new Date().toISOString()`), level filter. No `console.log`. Tests first. — depends on: 1.1 — **parallel with 1.2**
-- [ ] **1.4** `src/db/client.ts` — opens `bun:sqlite` `Database`, sets `PRAGMA journal_mode=WAL`, `foreign_keys=ON`, `busy_timeout=5000`. Exports singleton + idempotent `close()`. Tests first. — depends on: 1.2
 
 ### Phase 2 — Storage
 - [ ] **2.1** `src/db/schema.ts` + `src/db/migrate.ts` — SQL embedded as string literal (no `readFileSync`). Runs synchronously before HTTP listen. Tests: fresh → tables exist; second run → no-op. — depends on: 1.4
@@ -68,7 +65,10 @@ Plan approved. Holding before Phase 1.1 pending user green light to start coding
 ## Review Log
 | Task | Code | Security | Functional | DB | Type | Error | Rounds | Result |
 |------|------|---------|------------|----|----|------|--------|--------|
-(none yet)
+| 1.1 | N/A (config only) | N/A | N/A | N/A | N/A | N/A | 0 | ✅ |
+| 1.2 | PASS | PASS (path traversal refined) | 16/16 | N/A | PASS (strict PORT, readonly) | PASS | 1 | ✅ |
+| 1.3 | PASS | PASS | 18/19 (console.* spy skipped, verified by grep) | N/A | PASS (LEVEL_RANK readonly) | PASS→PASS (safe JSON fallback) | 1 | ✅ |
+| 1.4 | PASS | PASS | 100% | PASS for P0 scope | PASS | PASS (FK verify added) | 1 | ✅ |
 
 ## Key Decisions & Accepted Risks
 
@@ -119,9 +119,18 @@ Plan approved. Holding before Phase 1.1 pending user green light to start coding
 - Q5 Webhook observability → fire-and-forget with structured stderr log only. No retry queue until P2.
 
 ## Next Agent Prompt
-<!-- Populated when user confirms go-ahead to start Phase 1.1 -->
 
-Task: Phase 1.1 — initialize `current/claudegram/` Bun/TypeScript project skeleton.
+Task: Phase 2.1 (schema+migrate) and 2.2 (repo types) — launch in parallel.
+
+Project root: `/Users/plutozhang/Documents/claudegram`. Work in `current/claudegram/src/`. Stack: Bun 1.3.12 + TS strict + bun:sqlite + Zod. Test: `bun test` from `current/claudegram/`.
+
+2.1 = `src/db/schema.ts` (SQL string literal, NOT readFileSync) + `src/db/migrate.ts` (idempotent run). Schema per PROGRESS Key Decisions: messages composite PK `(session_id, id)`, `ingested_at DEFAULT unixepoch()*1000`, `CHECK(direction IN ('assistant','user'))`, sessions `name NOT NULL`. Tests: fresh DB → tables exist; second run → no-op. TDD.
+
+2.2 = `src/repo/types.ts` — `Message`, `Session`, `MessageRepo`, `SessionRepo` interfaces. Readonly returns. No implementation.
+
+After both green: launch 2.3 (`src/repo/sqlite.ts`) with `INSERT ... ON CONFLICT(session_id, id) DO NOTHING`, session upsert `ON CONFLICT(id) DO UPDATE SET last_seen_at=excluded.last_seen_at, name=excluded.name`. TDD, coverage ≥90%, all tests use `:memory:`.
+
+Original Phase 1.1 prompt archived — scaffold done at commit 2b3b04e.
 
 Project root: `/Users/plutozhang/Documents/claudegram`. Work in `current/claudegram/` (sibling to existing `current/fakechat/`). Do NOT touch `legacy/` or `current/fakechat/`.
 
