@@ -182,4 +182,107 @@ describe('migrate', () => {
     expect(count!.cnt).toBe(0);
     closeDatabase(db);
   });
+
+  // P1 migration tests
+
+  it('11. fresh DB after migrate() has status and last_read_at columns with correct defaults', () => {
+    migrate(db);
+    type ColInfo = { name: string; dflt_value: string | null; notnull: number };
+    const cols = db
+      .query<ColInfo, []>(`PRAGMA table_info(sessions)`)
+      .all()
+      .filter((c) => c.name === 'status' || c.name === 'last_read_at');
+
+    const statusCol = cols.find((c) => c.name === 'status');
+    const lastReadAtCol = cols.find((c) => c.name === 'last_read_at');
+
+    expect(statusCol).toBeDefined();
+    expect(statusCol!.dflt_value).toBe("'active'");
+    expect(statusCol!.notnull).toBe(1);
+
+    expect(lastReadAtCol).toBeDefined();
+    expect(lastReadAtCol!.dflt_value).toBe('0');
+    expect(lastReadAtCol!.notnull).toBe(1);
+    closeDatabase(db);
+  });
+
+  it('12. P0 DB simulation: migrate() adds missing columns; existing row gets correct defaults', () => {
+    // Simulate a P0 DB with only original 4 columns
+    db.exec(`
+      CREATE TABLE sessions (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        first_seen_at INTEGER NOT NULL,
+        last_seen_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS messages (
+        session_id TEXT NOT NULL,
+        id TEXT NOT NULL,
+        direction TEXT NOT NULL CHECK (direction IN ('assistant','user')),
+        ts INTEGER NOT NULL,
+        ingested_at INTEGER NOT NULL DEFAULT (CAST(unixepoch('subsec')*1000 AS INTEGER)),
+        content TEXT NOT NULL,
+        PRIMARY KEY (session_id, id),
+        FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_messages_session_ts ON messages(session_id, ts DESC);
+    `);
+
+    // Insert a pre-existing row (P0-era row)
+    db.run(
+      `INSERT INTO sessions (id, name, first_seen_at, last_seen_at) VALUES (?,?,?,?)`,
+      ['s-old', 'Old Session', 1000, 2000],
+    );
+
+    // Run migration — should ALTER TABLE to add missing columns
+    migrate(db);
+
+    // Both new columns must now be present
+    type ColInfo = { name: string };
+    const colNames = db
+      .query<ColInfo, []>(`PRAGMA table_info(sessions)`)
+      .all()
+      .map((c) => c.name);
+    expect(colNames).toContain('status');
+    expect(colNames).toContain('last_read_at');
+
+    // Existing row must have the column defaults applied
+    const row = db
+      .query<{ status: string; last_read_at: number }, [string]>(
+        `SELECT status, last_read_at FROM sessions WHERE id=?`,
+      )
+      .get('s-old');
+    expect(row).not.toBeNull();
+    expect(row!.status).toBe('active');
+    expect(row!.last_read_at).toBe(0);
+    closeDatabase(db);
+  });
+
+  it('13. migrate() called three times is idempotent — no throw, schema stable, row count unchanged', () => {
+    // First call creates a fresh DB
+    migrate(db);
+
+    db.run(
+      `INSERT INTO sessions (id, name, first_seen_at, last_seen_at) VALUES (?,?,?,?)`,
+      ['s1', 'Test', 1000, 2000],
+    );
+
+    // Second and third calls must not throw and must not duplicate anything
+    expect(() => migrate(db)).not.toThrow();
+    expect(() => migrate(db)).not.toThrow();
+
+    const count = db
+      .query<{ cnt: number }, []>(`SELECT COUNT(*) as cnt FROM sessions`)
+      .get();
+    expect(count!.cnt).toBe(1);
+
+    type ColInfo = { name: string };
+    const colNames = db
+      .query<ColInfo, []>(`PRAGMA table_info(sessions)`)
+      .all()
+      .map((c) => c.name);
+    expect(colNames).toContain('status');
+    expect(colNames).toContain('last_read_at');
+    closeDatabase(db);
+  });
 });

@@ -3,7 +3,9 @@ CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   first_seen_at INTEGER NOT NULL,
-  last_seen_at INTEGER NOT NULL
+  last_seen_at INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','ended')),
+  last_read_at INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS messages (

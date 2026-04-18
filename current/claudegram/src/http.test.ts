@@ -8,11 +8,13 @@ import { openDatabase, closeDatabase } from './db/client.js';
 const stubMsgRepo: MessageRepo = {
   insert: () => {},
   findBySession: () => [],
+  findBySessionPage: () => ({ messages: [], has_more: false }),
 };
 
 const stubSessRepo: SessionRepo = {
   upsert: () => {},
   findById: () => null,
+  findAll: () => [],
 };
 
 // Provide a real in-memory DB so RouterCtx is satisfied;

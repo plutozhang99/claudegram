@@ -256,11 +256,13 @@ describe('POST /ingest', () => {
     const stubMsgRepo: MessageRepo = {
       insert: () => { throw new Error('DB exploded'); },
       findBySession: () => [],
+      findBySessionPage: () => ({ messages: [], has_more: false }),
     };
 
     const stubSessRepo: SessionRepo = {
       upsert: () => {},
       findById: () => null,
+      findAll: () => [],
     };
 
     const stubCtx: RouterCtx = {

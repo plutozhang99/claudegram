@@ -1,5 +1,5 @@
 import type { Database } from '../db/client.js';
-import type { Message, Session, MessageInsert, SessionUpsert, MessageRepo, SessionRepo } from './types.js';
+import type { Message, Session, SessionListItem, MessageInsert, SessionUpsert, MessageRepo, SessionRepo } from './types.js';
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 500;
@@ -11,6 +11,9 @@ export class SqliteMessageRepo implements MessageRepo {
   private readonly stmtInsertWithoutIngested: ReturnType<Database['prepare']>;
   private readonly stmtFindWithBefore: ReturnType<Database['prepare']>;
   private readonly stmtFindWithoutBefore: ReturnType<Database['prepare']>;
+  private readonly stmtPageLookupCursor: ReturnType<Database['prepare']>;
+  private readonly stmtPageWithBefore: ReturnType<Database['prepare']>;
+  private readonly stmtPageWithoutBefore: ReturnType<Database['prepare']>;
 
   constructor(private readonly db: Database) {
     this.stmtInsertWithIngested = db.prepare(
@@ -40,6 +43,29 @@ export class SqliteMessageRepo implements MessageRepo {
        ORDER BY ts DESC
        LIMIT ?`
     );
+
+    // Cursor lookup: resolve a message id to its ts for composite (ts, id) pagination
+    this.stmtPageLookupCursor = db.prepare(
+      `SELECT ts FROM messages WHERE session_id=? AND id=?`
+    );
+
+    // Page queries fetch limit+1 rows so we can detect has_more.
+    // Composite cursor: WHERE ts < cursor.ts OR (ts = cursor.ts AND id < before_id)
+    this.stmtPageWithBefore = db.prepare(
+      `SELECT session_id, id, direction, ts, ingested_at, content
+       FROM messages
+       WHERE session_id=? AND (ts < ? OR (ts = ? AND id < ?))
+       ORDER BY ts DESC, id DESC
+       LIMIT ?`
+    );
+
+    this.stmtPageWithoutBefore = db.prepare(
+      `SELECT session_id, id, direction, ts, ingested_at, content
+       FROM messages
+       WHERE session_id=?
+       ORDER BY ts DESC, id DESC
+       LIMIT ?`
+    );
   }
 
   insert(msg: MessageInsert): void {
@@ -66,13 +92,39 @@ export class SqliteMessageRepo implements MessageRepo {
   // Clamp silently: HTTP layer is the enforcement point for invalid input.
   // Clamping floor to 1 prevents SQLite's "LIMIT -1 = unlimited" footgun.
   findBySession(session_id: string, opts?: { before?: number; limit?: number }): ReadonlyArray<Message> {
-    const rawLimit = opts?.limit ?? DEFAULT_LIMIT;
+    const candidate = opts?.limit ?? DEFAULT_LIMIT;
+    const rawLimit = Number.isFinite(candidate) ? candidate : DEFAULT_LIMIT;
     const limit = Math.min(Math.max(1, rawLimit), MAX_LIMIT);
 
     if (opts?.before !== undefined) {
       return this.stmtFindWithBefore.all(session_id, opts.before, limit) as Message[];
     }
     return this.stmtFindWithoutBefore.all(session_id, limit) as Message[];
+  }
+
+  findBySessionPage(
+    session_id: string,
+    opts?: { before_id?: string; limit?: number },
+  ): { readonly messages: ReadonlyArray<Message>; readonly has_more: boolean } {
+    const candidate = opts?.limit ?? DEFAULT_LIMIT;
+    const rawLimit = Number.isFinite(candidate) ? candidate : DEFAULT_LIMIT;
+    const limit = Math.min(Math.max(1, rawLimit), MAX_LIMIT);
+    const fetchCount = limit + 1;
+
+    let rows: Message[];
+
+    if (opts?.before_id !== undefined) {
+      const cursor = this.stmtPageLookupCursor.get(session_id, opts.before_id) as { ts: number } | null;
+      if (cursor === null) {
+        return { messages: [], has_more: false };
+      }
+      rows = this.stmtPageWithBefore.all(session_id, cursor.ts, cursor.ts, opts.before_id, fetchCount) as Message[];
+    } else {
+      rows = this.stmtPageWithoutBefore.all(session_id, fetchCount) as Message[];
+    }
+
+    const has_more = rows.length > limit;
+    return { messages: rows.slice(0, limit), has_more };
   }
 }
 
@@ -81,6 +133,7 @@ export class SqliteMessageRepo implements MessageRepo {
 export class SqliteSessionRepo implements SessionRepo {
   private readonly stmtUpsert: ReturnType<Database['prepare']>;
   private readonly stmtFindById: ReturnType<Database['prepare']>;
+  private readonly stmtFindAll: ReturnType<Database['prepare']>;
 
   constructor(private readonly db: Database) {
     this.stmtUpsert = db.prepare(
@@ -92,9 +145,18 @@ export class SqliteSessionRepo implements SessionRepo {
     );
 
     this.stmtFindById = db.prepare(
-      `SELECT id, name, first_seen_at, last_seen_at
+      `SELECT id, name, first_seen_at, last_seen_at, status, last_read_at
        FROM sessions
        WHERE id=?`
+    );
+
+    this.stmtFindAll = db.prepare(
+      `SELECT s.id, s.name, s.first_seen_at, s.last_seen_at, s.status, s.last_read_at,
+              COALESCE(SUM(CASE WHEN m.direction = 'assistant' AND m.ts > s.last_read_at THEN 1 ELSE 0 END), 0) AS unread_count
+       FROM sessions s
+       LEFT JOIN messages m ON m.session_id = s.id
+       GROUP BY s.id, s.name, s.first_seen_at, s.last_seen_at, s.status, s.last_read_at
+       ORDER BY s.last_seen_at DESC`
     );
   }
 
@@ -104,5 +166,9 @@ export class SqliteSessionRepo implements SessionRepo {
 
   findById(id: string): Readonly<Session> | null {
     return (this.stmtFindById.get(id) as Session | null) ?? null;
+  }
+
+  findAll(): ReadonlyArray<SessionListItem> {
+    return this.stmtFindAll.all() as SessionListItem[];
   }
 }

@@ -157,6 +157,17 @@ describe('SqliteMessageRepo', () => {
     expect(rows.length).toBe(500);
   });
 
+  // Fix 4: NaN guard — NaN must not be passed to SQLite as LIMIT (SQLite treats it as 0)
+  it('findBySession with limit=NaN returns rows using DEFAULT_LIMIT (not 0)', () => {
+    insertSession('s1');
+    for (let i = 1; i <= 3; i++) {
+      msgRepo.insert({ session_id: 's1', id: `m${i}`, direction: 'user', ts: i * 10, content: `msg${i}` });
+    }
+    const rows = msgRepo.findBySession('s1', { limit: NaN });
+    // DEFAULT_LIMIT=50, all 3 rows fit — must return 3, not 0
+    expect(rows.length).toBe(3);
+  });
+
   // Test 12b: limit=0 and limit=-1 are clamped to 1 (not silently unlimited).
   // Without the floor clamp, SQLite treats LIMIT -1 as unlimited.
   it('findBySession with limit=0 returns at most 1 row (clamped, never unlimited)', () => {
@@ -219,5 +230,200 @@ describe('SqliteSessionRepo', () => {
   it('findById unknown id returns null', () => {
     const result = sessRepo.findById('does-not-exist');
     expect(result).toBeNull();
+  });
+
+  // P1 tests: findById returns new fields
+
+  it('findById returns status and last_read_at fields', () => {
+    sessRepo.upsert({ id: 'sess1', name: 'S', now: 1000 });
+    const sess = sessRepo.findById('sess1');
+    expect(sess).not.toBeNull();
+    expect(sess!.status).toBe('active');
+    expect(sess!.last_read_at).toBe(0);
+  });
+});
+
+// ── P1: findAll tests ──────────────────────────────────────────────────────────
+
+describe('SqliteSessionRepo.findAll', () => {
+  it('findAll on empty DB returns []', () => {
+    const items = sessRepo.findAll();
+    expect(items).toEqual([]);
+  });
+
+  it('findAll with one session, zero messages → one item, unread_count=0, status=active, last_read_at=0', () => {
+    sessRepo.upsert({ id: 's1', name: 'Solo', now: 1000 });
+    const items = sessRepo.findAll();
+    expect(items.length).toBe(1);
+    expect(items[0].id).toBe('s1');
+    expect(items[0].unread_count).toBe(0);
+    expect(items[0].status).toBe('active');
+    expect(items[0].last_read_at).toBe(0);
+  });
+
+  it('findAll with assistant + user messages → unread_count counts only assistant', () => {
+    sessRepo.upsert({ id: 's1', name: 'S', now: 1000 });
+    // ts is > last_read_at (0), so assistant messages count as unread
+    msgRepo.insert({ session_id: 's1', id: 'm1', direction: 'assistant', ts: 10, content: 'hi' });
+    msgRepo.insert({ session_id: 's1', id: 'm2', direction: 'assistant', ts: 20, content: 'there' });
+    msgRepo.insert({ session_id: 's1', id: 'm3', direction: 'user', ts: 30, content: 'hello' });
+    const items = sessRepo.findAll();
+    expect(items.length).toBe(1);
+    // 2 assistant messages with ts > last_read_at=0; 1 user not counted
+    expect(items[0].unread_count).toBe(2);
+  });
+
+  it('findAll with messages where ts <= last_read_at → those excluded from unread_count', () => {
+    sessRepo.upsert({ id: 's1', name: 'S', now: 1000 });
+    // Manually set last_read_at=50 via raw SQL (no setter in repo yet)
+    db.run(`UPDATE sessions SET last_read_at=50 WHERE id='s1'`);
+    msgRepo.insert({ session_id: 's1', id: 'm1', direction: 'assistant', ts: 30, content: 'old' });
+    msgRepo.insert({ session_id: 's1', id: 'm2', direction: 'assistant', ts: 50, content: 'at boundary' });
+    msgRepo.insert({ session_id: 's1', id: 'm3', direction: 'assistant', ts: 60, content: 'new' });
+    const items = sessRepo.findAll();
+    expect(items.length).toBe(1);
+    // Only ts=60 (> 50) counts; ts=30 and ts=50 do not
+    expect(items[0].unread_count).toBe(1);
+  });
+
+  it('findAll ORDER BY last_seen_at DESC — two sessions ordered correctly', () => {
+    sessRepo.upsert({ id: 'early', name: 'Early', now: 1000 });
+    sessRepo.upsert({ id: 'late', name: 'Late', now: 9000 });
+    const items = sessRepo.findAll();
+    expect(items.length).toBe(2);
+    expect(items[0].id).toBe('late');
+    expect(items[1].id).toBe('early');
+  });
+});
+
+// ── P1: findBySessionPage tests ────────────────────────────────────────────────
+
+describe('SqliteMessageRepo.findBySessionPage', () => {
+  it('unknown session_id → { messages: [], has_more: false }', () => {
+    const result = msgRepo.findBySessionPage('no-such-session');
+    expect(result.messages).toEqual([]);
+    expect(result.has_more).toBe(false);
+  });
+
+  it('before_id pointing to unknown message → { messages: [], has_more: false }', () => {
+    sessRepo.upsert({ id: 's1', name: 'S', now: 1000 });
+    msgRepo.insert({ session_id: 's1', id: 'm1', direction: 'user', ts: 100, content: 'hello' });
+    const result = msgRepo.findBySessionPage('s1', { before_id: 'nonexistent-id' });
+    expect(result.messages).toEqual([]);
+    expect(result.has_more).toBe(false);
+  });
+
+  it('limit=2, exactly 2 rows → has_more=false, messages.length=2', () => {
+    sessRepo.upsert({ id: 's1', name: 'S', now: 1000 });
+    msgRepo.insert({ session_id: 's1', id: 'm1', direction: 'user', ts: 10, content: 'a' });
+    msgRepo.insert({ session_id: 's1', id: 'm2', direction: 'user', ts: 20, content: 'b' });
+    const result = msgRepo.findBySessionPage('s1', { limit: 2 });
+    expect(result.has_more).toBe(false);
+    expect(result.messages.length).toBe(2);
+  });
+
+  it('limit=2, 3 rows total → has_more=true, messages.length=2 (most-recent 2, ORDER BY ts DESC)', () => {
+    sessRepo.upsert({ id: 's1', name: 'S', now: 1000 });
+    msgRepo.insert({ session_id: 's1', id: 'm1', direction: 'user', ts: 10, content: 'oldest' });
+    msgRepo.insert({ session_id: 's1', id: 'm2', direction: 'user', ts: 20, content: 'middle' });
+    msgRepo.insert({ session_id: 's1', id: 'm3', direction: 'user', ts: 30, content: 'newest' });
+    const result = msgRepo.findBySessionPage('s1', { limit: 2 });
+    expect(result.has_more).toBe(true);
+    expect(result.messages.length).toBe(2);
+    // Most-recent 2 are ts=30, ts=20
+    expect(result.messages[0].ts).toBe(30);
+    expect(result.messages[1].ts).toBe(20);
+  });
+
+  it('with before_id on real cursor → returns rows strictly older than cursor ts', () => {
+    sessRepo.upsert({ id: 's1', name: 'S', now: 1000 });
+    msgRepo.insert({ session_id: 's1', id: 'm1', direction: 'user', ts: 10, content: 'oldest' });
+    msgRepo.insert({ session_id: 's1', id: 'm2', direction: 'user', ts: 20, content: 'middle' });
+    msgRepo.insert({ session_id: 's1', id: 'm3', direction: 'user', ts: 30, content: 'newest' });
+    // before_id='m3' (ts=30) → should return only rows with ts < 30
+    const result = msgRepo.findBySessionPage('s1', { before_id: 'm3', limit: 10 });
+    expect(result.has_more).toBe(false);
+    expect(result.messages.length).toBe(2);
+    expect(result.messages[0].ts).toBe(20);
+    expect(result.messages[1].ts).toBe(10);
+  });
+
+  it('limit=0 clamps to 1', () => {
+    sessRepo.upsert({ id: 's1', name: 'S', now: 1000 });
+    for (let i = 1; i <= 3; i++) {
+      msgRepo.insert({ session_id: 's1', id: `m${i}`, direction: 'user', ts: i * 10, content: `msg${i}` });
+    }
+    const result = msgRepo.findBySessionPage('s1', { limit: 0 });
+    expect(result.messages.length).toBe(1);
+  });
+
+  it('limit=-5 clamps to 1', () => {
+    sessRepo.upsert({ id: 's1', name: 'S', now: 1000 });
+    for (let i = 1; i <= 3; i++) {
+      msgRepo.insert({ session_id: 's1', id: `m${i}`, direction: 'user', ts: i * 10, content: `msg${i}` });
+    }
+    const result = msgRepo.findBySessionPage('s1', { limit: -5 });
+    expect(result.messages.length).toBe(1);
+  });
+
+  it('limit=9999 clamps to 500', () => {
+    sessRepo.upsert({ id: 's1', name: 'S', now: 1000 });
+    for (let i = 1; i <= 600; i++) {
+      msgRepo.insert({ session_id: 's1', id: `m${i}`, direction: 'user', ts: i, content: `msg${i}` });
+    }
+    const result = msgRepo.findBySessionPage('s1', { limit: 9999 });
+    expect(result.messages.length).toBe(500);
+    expect(result.has_more).toBe(true);
+  });
+
+  // Fix 3: composite cursor (ts, id) — duplicate ts pagination
+  it('pagination with duplicate ts: insert 3 messages at same ts with ids m1,m2,m3; page limit=2 without cursor returns newest 2 (m3,m2) and has_more=true; next page with before_id=m2 returns m1 and has_more=false', () => {
+    sessRepo.upsert({ id: 's1', name: 'S', now: 1000 });
+    // All share the same ts — ordering falls back to id DESC
+    msgRepo.insert({ session_id: 's1', id: 'm1', direction: 'user', ts: 100, content: 'first' });
+    msgRepo.insert({ session_id: 's1', id: 'm2', direction: 'user', ts: 100, content: 'second' });
+    msgRepo.insert({ session_id: 's1', id: 'm3', direction: 'user', ts: 100, content: 'third' });
+
+    // First page: limit=2, no cursor
+    const page1 = msgRepo.findBySessionPage('s1', { limit: 2 });
+    expect(page1.has_more).toBe(true);
+    expect(page1.messages.length).toBe(2);
+    expect(page1.messages[0].id).toBe('m3');
+    expect(page1.messages[1].id).toBe('m2');
+
+    // Second page: before_id='m2'
+    const page2 = msgRepo.findBySessionPage('s1', { before_id: 'm2', limit: 2 });
+    expect(page2.has_more).toBe(false);
+    expect(page2.messages.length).toBe(1);
+    expect(page2.messages[0].id).toBe('m1');
+  });
+
+  it('pagination is stable across pages when all ts identical', () => {
+    sessRepo.upsert({ id: 's1', name: 'S', now: 1000 });
+    // Insert 4 messages all with same ts; ids are lexicographically ordered
+    for (const id of ['ma', 'mb', 'mc', 'md']) {
+      msgRepo.insert({ session_id: 's1', id, direction: 'user', ts: 500, content: id });
+    }
+    // Page 1: limit=2, no cursor → md, mc (DESC by id)
+    const page1 = msgRepo.findBySessionPage('s1', { limit: 2 });
+    expect(page1.has_more).toBe(true);
+    expect(page1.messages.map((m) => m.id)).toEqual(['md', 'mc']);
+
+    // Page 2: before_id='mc' → mb, ma
+    const page2 = msgRepo.findBySessionPage('s1', { before_id: 'mc', limit: 2 });
+    expect(page2.has_more).toBe(false);
+    expect(page2.messages.map((m) => m.id)).toEqual(['mb', 'ma']);
+  });
+
+  // Fix 4: NaN guard on limit
+  it('findBySessionPage with limit=NaN returns rows using DEFAULT_LIMIT (not 0)', () => {
+    sessRepo.upsert({ id: 's1', name: 'S', now: 1000 });
+    for (let i = 1; i <= 3; i++) {
+      msgRepo.insert({ session_id: 's1', id: `m${i}`, direction: 'user', ts: i * 10, content: `msg${i}` });
+    }
+    const result = msgRepo.findBySessionPage('s1', { limit: NaN });
+    // DEFAULT_LIMIT=50, all 3 rows fit
+    expect(result.messages.length).toBe(3);
+    expect(result.has_more).toBe(false);
   });
 });

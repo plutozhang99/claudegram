@@ -10,11 +10,13 @@ import type { MessageRepo, SessionRepo } from '../repo/types.js';
 const stubMsgRepo: MessageRepo = {
   insert: () => {},
   findBySession: () => [],
+  findBySessionPage: () => ({ messages: [], has_more: false }),
 };
 
 const stubSessRepo: SessionRepo = {
   upsert: () => {},
   findById: () => null,
+  findAll: () => [],
 };
 
 const stubLogger = {
