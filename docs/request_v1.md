@@ -194,10 +194,12 @@ The **HTTP + WebSocket + repo abstraction + CF Access service token** choices ar
 - `current/fakechat/`: add optional `CLAUDEGRAM_URL` webhook POST on every outgoing message.
 - Deliverable: Claude Code → fakechat → claudegram → SQLite. Verify with a DB query.
 
-**P1 — PWA skeleton + WebSocket live push**
-- `current/claudegram/web/`: `index.html`, `manifest.json`, `sw.js`, installable PWA.
+**P1 — PWA skeleton + WebSocket live push** — see section 12 for frontend strategy.
+- `current/claudegram/web/`: `index.html`, `manifest.json`, `sw.js`, `app.js`, `style.css`, `icons/`. Installable PWA.
 - `/user-socket` WebSocket: streams new messages to connected PWAs.
-- PWA lists sessions, shows message history per session (paginated from SQLite).
+- `GET /api/sessions` — list sessions (id, name, last_seen_at, unread_count).
+- `GET /api/messages?session_id=...&before=...&limit=...` — history pagination.
+- PWA lists sessions in sidebar, shows message history per session, live-appends new messages.
 - Deliverable: Open PWA, see history, receive live messages.
 
 **P2 — fakechat reverse WebSocket + user replies**
@@ -368,8 +370,120 @@ You are picking this up in a fresh Claude Code session via `start-project`. The 
 
 - Everything in sections **8.1 – 8.5** is P0.
 - Section **8.6** is explicitly out of scope — don't scope-creep.
+- Section **12** (frontend strategy) is the spec for P1 — don't start it in P0, but read it so P0's HTTP routing anticipates it (serve `web/` as static, reserve `/api/*` paths).
 - Read `legacy/daemon/src/` for inspiration on Bun HTTP patterns + PID lock (section 4.3 of `legacy/README.md`) but **don't import legacy code**; it's archived.
-- Read `current/fakechat/server.ts` to understand the existing plugin shape before extending it.
+- Read `current/fakechat/server.ts` to understand the existing plugin shape before extending it. The `HTML` constant at the bottom (lines 212–295) is what you'll crib visual idioms from in P1.
 - Start with `planner` agent. Hand it this whole file. Then `tdd-guide` for the repo + ingest handler.
 
 Section 5 (the "bridge killed" matrix) is important for setting user expectations in the P0 README — surface those trade-offs honestly.
+
+---
+
+## 12. Frontend strategy (P1)
+
+### 12.1 Reuse vs rewrite: honest assessment
+
+`current/fakechat/server.ts` embeds an ~80-line HTML string (lines 212–295) — a single-tab, single-session chat UI. Evaluating what's reusable for claudegram's PWA:
+
+| fakechat frontend asset | Reuse for claudegram? |
+|---|---|
+| Message bubble format (`[HH:MM:SS] who: text`) | ✅ Copy the CSS + markup verbatim |
+| Attachment chip + download link rendering | ✅ Copy verbatim |
+| textarea + attach button + send compose box | ✅ Copy layout and styling |
+| WebSocket `onmessage` → `add(m)` append pattern | ✅ Borrow the pattern |
+| Single-tab, single-session design | ❌ Rewrite — claudegram aggregates N sessions |
+| `msgs` object as sole message store (in-memory) | ❌ Replace with "paginate from `/api/messages` + live-append from WebSocket" |
+| HTML as a string literal inside `server.ts` | ❌ Split into real static files (manifest.json + sw.js must be served at their own paths) |
+| No Notification API, no service worker, not installable | ❌ All new |
+
+**Verdict**: borrow fakechat's visual language (~150 lines of CSS + single-message rendering helper) but write the PWA shell from scratch. Attempting to evolve fakechat's HTML in-place is a rewrite hiding behind a diff.
+
+### 12.2 Directory layout (P1)
+
+```
+current/claudegram/web/
+├── index.html        # PWA shell: sidebar (sessions) + messages pane + compose
+├── manifest.json     # name, icons, start_url, display: standalone
+├── sw.js             # service worker — MVP: offline shell cache; P5: add Push handler
+├── app.js            # main logic (~300–500 lines vanilla JS)
+├── style.css         # bubble/chip/compose styling ported from fakechat
+└── icons/
+    ├── icon-192.png
+    └── icon-512.png
+```
+
+Served directly by claudegram's HTTP server (same origin as `/api/*` and WebSocket). CF Access terminates at the edge, so every request — static asset, API, WebSocket — is already authenticated by the time it hits claudegram.
+
+### 12.3 Framework: none (for MVP)
+
+Vanilla JS until ~500 lines becomes unmaintainable. If P3 (notifications, unread counters, mute toggles, session routing) pushes complexity over the threshold, reach for **Preact** or **Svelte** via ESM import (no build step). **Do not** introduce React + Next.js — the runtime cost, hydration model, and build complexity are wrong for a personal PWA serving one user.
+
+Keep `app.js` structured by concern:
+- `ws.js` — WebSocket connect/reconnect with exponential backoff, event emitter.
+- `store.js` — in-memory session + message cache, hydrated from `/api/sessions` + `/api/messages`.
+- `render.js` — DOM updates (session list, message list, compose).
+- `notify.js` — Notification API wrapper, permission flow, per-session mute state in localStorage.
+- `index.js` — boot + wiring.
+
+Even without a bundler, splitting into ES modules (`<script type="module" src="/web/index.js">`) keeps the files small and testable.
+
+### 12.4 PWA essentials
+
+- **`manifest.json`**: `"display": "standalone"`, `"start_url": "/"`, 192 + 512 icons. Without this, iOS Safari won't treat it as installable and Web Push (P5) is blocked.
+- **`sw.js` (MVP)**: only caches the app shell (`/`, `/index.html`, `/app.js`, `/style.css`, `/manifest.json`). No API caching — message data must be live. Use `workbox`-less hand-written fetch handler (~30 lines). Versioned cache name so shell updates invalidate cleanly.
+- **Installability**: test on iOS Safari (Add to Home Screen) and Android Chrome (install prompt). iOS 16.4+ supports Web Push only after install.
+
+### 12.5 UI shape (P1 target)
+
+```
+┌──────────────┬────────────────────────────────────────────┐
+│ Sessions     │ #api-refactor  (active · last 2m ago)      │
+│              │ ─────────────────────────────────────────── │
+│ ● api-       │ [09:12:04] bot: working on migration…      │
+│   refactor   │ [09:12:34] you: skip the v2 table          │
+│   (2 unread) │ [09:15:01] bot: done. tests pass.          │
+│              │                                            │
+│ ○ test-suite │                                            │
+│   (5m)       │                                            │
+│              │                                            │
+│ ○ docs-pass  │                                            │
+│   (1h)       │                                            │
+│              │                                            │
+│              │ ┌─────────────────────────────────┐ [attach]│
+│              │ │ reply…                          │ [send]  │
+│              │ └─────────────────────────────────┘         │
+└──────────────┴────────────────────────────────────────────┘
+```
+
+Mobile: sidebar collapses to a hamburger / session picker. Desktop: persistent sidebar. CSS Grid + a `@media (max-width: 640px)` breakpoint handles both without a framework.
+
+### 12.6 HTTP + WebSocket contract for the frontend (P1 wire format)
+
+```typescript
+// GET /api/sessions
+// → { sessions: Array<{ id: string; name: string; last_seen_at: number; unread_count: number; status: 'active' | 'ended' }> }
+
+// GET /api/messages?session_id=SID&before=MID&limit=50
+// → { messages: Message[]; has_more: boolean }
+
+// GET /api/me
+// → { email: string }   // read from Cf-Access-Authenticated-User-Email header; for local dev, a stub value
+
+// WebSocket /user-socket
+// Server → Client events:
+//   { type: 'message'; session_id: string; message: Message }
+//   { type: 'session_update'; session: Session }
+// Client → Server (P2+):
+//   { type: 'reply'; session_id: string; text: string; reply_to?: string }
+//   { type: 'mark_read'; session_id: string; up_to_message_id: string }
+```
+
+Zod schemas for both directions. P0 only needs to anticipate these routes exist (reserve `/api/*` path prefix, reserve `/web/*` for static); the P1 session builds them.
+
+### 12.7 What's NOT in P1
+
+- Per-session mute (P3)
+- Rich file previews / image inlining in-feed (P3)
+- Web Push / offline message sync (P5)
+- Permission-prompt action buttons (P6)
+- Admin UI for CF Access allowlist (never — use CF dashboard)
