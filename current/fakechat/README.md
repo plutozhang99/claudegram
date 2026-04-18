@@ -39,7 +39,7 @@ upstream/standalone version — no webhook calls, no extra headers.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `FAKECHAT_PORT` | _(empty)_ | If unset, auto-picks the first free port in 8787..8797. If set explicitly, uses that port (no fallback). |
-| `CLAUDEGRAM_URL` | _(empty)_ | When set, inbound messages are POSTed to `${CLAUDEGRAM_URL}/ingest` as fire-and-forget (Phase 4.3a — not yet implemented). Unset = no webhook. |
+| `CLAUDEGRAM_URL` | _(empty)_ | When set, messages (both `reply` outbound and inbound from the UI) are POSTed to `${CLAUDEGRAM_URL}/ingest` as fire-and-forget: 5s timeout, structured JSONL to stderr on failure, never throws. Unset = no webhook. |
 | `CLAUDEGRAM_SERVICE_TOKEN_ID` | _(empty)_ | Cloudflare Access client ID. When set alongside `CLAUDEGRAM_SERVICE_TOKEN_SECRET`, outbound requests include `CF-Access-Client-Id` / `CF-Access-Client-Secret` headers. |
 | `CLAUDEGRAM_SERVICE_TOKEN_SECRET` | _(empty)_ | Cloudflare Access client secret (see above). |
 | `CLAUDE_SESSION_ID` | `pid-<PID>` | Scopes the state directory to a specific session — allows multiple parallel fakechat instances without colliding. If unset, falls back to `pid-<PID>`. |

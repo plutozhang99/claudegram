@@ -19,6 +19,8 @@ export const ingestSchema = z.object({
     id: z.string().min(1).max(256),
     direction: z.enum(['assistant', 'user']),
     ts: z.number().int().nonnegative(),
+    // content is deliberately allowed to be empty: fakechat's file-only messages
+    // upstream send zero text with an attachment payload; we preserve that shape.
     content: z.string().max(1_000_000),
   }),
 });
