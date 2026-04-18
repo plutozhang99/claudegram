@@ -17,11 +17,184 @@ import { homedir } from 'os'
 import { join, extname, basename } from 'path'
 import type { ServerWebSocket } from 'bun'
 
-const PORT = Number(process.env.FAKECHAT_PORT ?? 8787)
-const STATE_DIR = join(homedir(), '.claude', 'channels', 'fakechat')
+// ---------------------------------------------------------------------------
+// Phase 4.1 — Claudegram env vars (optional; empty = upstream-identical behavior)
+// ---------------------------------------------------------------------------
+const CLAUDEGRAM_URL = process.env.CLAUDEGRAM_URL ?? ''
+const CLAUDEGRAM_SERVICE_TOKEN_ID = process.env.CLAUDEGRAM_SERVICE_TOKEN_ID ?? ''
+const CLAUDEGRAM_SERVICE_TOKEN_SECRET = process.env.CLAUDEGRAM_SERVICE_TOKEN_SECRET ?? ''
+
+// ---------------------------------------------------------------------------
+// Phase 4.0 — Scope STATE_DIR per session
+// ---------------------------------------------------------------------------
+const SESSION_SCOPE = process.env.CLAUDE_SESSION_ID ?? `pid-${process.pid}`
+const STATE_DIR = join(homedir(), '.claude', 'channels', 'fakechat', SESSION_SCOPE)
 const INBOX_DIR = join(STATE_DIR, 'inbox')
 const OUTBOX_DIR = join(STATE_DIR, 'outbox')
 
+// Create STATE_DIR once at startup (subdirs are created lazily as before).
+mkdirSync(STATE_DIR, { recursive: true })
+
+// ---------------------------------------------------------------------------
+// Phase 4.2 — Stable session_id helpers
+// ---------------------------------------------------------------------------
+export function generateUlid(): string {
+  // Simple Crockford-base32 timestamp + random. Sufficient for session IDs —
+  // collision risk is negligible and human-readable ordering by time isn't required.
+  const TIME_LEN = 10
+  const RAND_LEN = 16
+  const ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
+  let ts = Date.now()
+  let out = ''
+  for (let i = TIME_LEN - 1; i >= 0; i--) {
+    out = ALPHABET[ts % 32] + out
+    ts = Math.floor(ts / 32)
+  }
+  for (let i = 0; i < RAND_LEN; i++) {
+    out += ALPHABET[Math.floor(Math.random() * 32)]
+  }
+  return out
+}
+
+/**
+ * Returns a stable session ID for the lifetime of this fakechat process.
+ * Accepts stateDir so it can be called with a tmpdir during tests.
+ */
+export function getSessionId(stateDir: string = STATE_DIR): string {
+  const fromEnv = process.env.CLAUDE_SESSION_ID
+  if (fromEnv && fromEnv.length > 0) return fromEnv
+
+  // Persist a ULID so it's stable across restarts within the same STATE_DIR scope.
+  const sessionFile = join(stateDir, 'session_id')
+  try {
+    const existing = readFileSync(sessionFile, 'utf-8').trim()
+    if (existing.length > 0) return existing
+    // Empty file — fall through to ULID generation (treat as if file didn't exist).
+  } catch {
+    // File doesn't exist — fall through.
+  }
+
+  const id = generateUlid()
+  try {
+    writeFileSync(sessionFile, id, { flag: 'wx' })
+    return id
+  } catch {
+    // Race or filesystem issue — try to read what's there.
+    try {
+      const retry = readFileSync(sessionFile, 'utf-8').trim()
+      if (retry.length > 0) return retry
+    } catch {
+      // Final fallback — use the generated ULID even though we couldn't persist.
+    }
+    return id
+  }
+}
+
+// SESSION_ID is available for Phase 4.3+ (webhook, registration, etc.).
+const SESSION_ID = getSessionId(STATE_DIR)
+
+// ---------------------------------------------------------------------------
+// Phase 4.3a — postIngest webhook helper
+// ---------------------------------------------------------------------------
+type IngestPayload = {
+  session_id: string
+  session_name?: string
+  message: {
+    id: string
+    direction: 'assistant' | 'user'
+    ts: number
+    content: string
+  }
+}
+
+type IngestConfig = {
+  url: string
+  tokenId: string
+  tokenSecret: string
+}
+
+function defaultIngestConfig(): IngestConfig {
+  return {
+    url: CLAUDEGRAM_URL,
+    tokenId: CLAUDEGRAM_SERVICE_TOKEN_ID,
+    tokenSecret: CLAUDEGRAM_SERVICE_TOKEN_SECRET,
+  }
+}
+
+export async function postIngest(
+  payload: IngestPayload,
+  cfg: IngestConfig = defaultIngestConfig(),
+): Promise<void> {
+  // Opted out — upstream-identical behavior.
+  if (!cfg.url) return
+
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  }
+  if (cfg.tokenId && cfg.tokenSecret) {
+    headers['CF-Access-Client-Id'] = cfg.tokenId
+    headers['CF-Access-Client-Secret'] = cfg.tokenSecret
+  }
+
+  try {
+    const res = await fetch(`${cfg.url}/ingest`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(5000),
+    })
+
+    if (!res.ok) {
+      process.stderr.write(
+        JSON.stringify({
+          ts: new Date().toISOString(),
+          level: 'warn',
+          msg: 'ingest_webhook_failure',
+          kind: 'non-2xx',
+          status: res.status,
+          err: `HTTP ${res.status}`,
+        }) + '\n',
+      )
+    }
+  } catch (err: unknown) {
+    let kind: string
+    if (
+      err instanceof Error &&
+      (err.name === 'TimeoutError' || err.name === 'AbortError')
+    ) {
+      kind = 'timeout'
+    } else if (err instanceof Error && (err.message.includes('ECONNREFUSED') || (err as NodeJS.ErrnoException).code === 'ECONNREFUSED')) {
+      kind = 'refused'
+    } else {
+      kind = 'network'
+    }
+    process.stderr.write(
+      JSON.stringify({
+        ts: new Date().toISOString(),
+        level: 'warn',
+        msg: 'ingest_webhook_failure',
+        kind,
+        status: null,
+        err: err instanceof Error ? err.message : String(err),
+      }) + '\n',
+    )
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4.2b — Port auto-pick
+// Bun.serve throws synchronously with EADDRINUSE — confirmed via manual test:
+//   bun -e "Bun.serve({port: 22, ...})"  →  throws immediately, exit 1
+// So a simple try/continue loop is sufficient; no async needed.
+// ---------------------------------------------------------------------------
+const explicitPort = process.env.FAKECHAT_PORT
+const PORT_CANDIDATES = explicitPort
+  ? [Number(explicitPort)]
+  : [8787, 8788, 8789, 8790, 8791, 8792, 8793, 8794, 8795, 8796, 8797]
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 type Msg = {
   id: string
   from: 'user' | 'assistant'
@@ -56,6 +229,87 @@ function mime(ext: string) {
   return m[ext] ?? 'application/octet-stream'
 }
 
+// ---------------------------------------------------------------------------
+// startServer — wraps Bun.serve with port auto-pick retry
+// ---------------------------------------------------------------------------
+function startServer(tryPorts: number[]): ReturnType<typeof Bun.serve> {
+  for (const p of tryPorts) {
+    try {
+      return Bun.serve({
+        port: p,
+        hostname: '127.0.0.1',
+        fetch(req, server) {
+          const url = new URL(req.url)
+
+          if (url.pathname === '/ws') {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            if ((server as any).upgrade(req)) return undefined
+            return new Response('upgrade failed', { status: 400 })
+          }
+
+          if (url.pathname.startsWith('/files/')) {
+            const f = url.pathname.slice(7)
+            if (f.includes('..') || f.includes('/')) return new Response('bad', { status: 400 })
+            try {
+              return new Response(readFileSync(join(OUTBOX_DIR, f)), {
+                headers: { 'content-type': mime(extname(f).toLowerCase()) },
+              })
+            } catch {
+              return new Response('404', { status: 404 })
+            }
+          }
+
+          if (url.pathname === '/upload' && req.method === 'POST') {
+            return (async () => {
+              const form = await req.formData()
+              const id = String(form.get('id') ?? '')
+              const text = String(form.get('text') ?? '')
+              const f = form.get('file')
+              if (!id) return new Response('missing id', { status: 400 })
+              let file: { path: string; name: string } | undefined
+              if (f instanceof File && f.size > 0) {
+                mkdirSync(INBOX_DIR, { recursive: true })
+                const ext = extname(f.name).toLowerCase() || '.bin'
+                const path = join(INBOX_DIR, `${Date.now()}${ext}`)
+                writeFileSync(path, Buffer.from(await f.arrayBuffer()))
+                file = { path, name: f.name }
+              }
+              deliver(id, text, file)
+              return new Response(null, { status: 204 })
+            })()
+          }
+
+          if (url.pathname === '/') {
+            return new Response(HTML, { headers: { 'content-type': 'text/html; charset=utf-8' } })
+          }
+          return new Response('404', { status: 404 })
+        },
+        websocket: {
+          open: ws => { clients.add(ws) },
+          close: ws => { clients.delete(ws) },
+          message: (_, raw) => {
+            try {
+              const { id, text } = JSON.parse(String(raw)) as { id: string; text: string }
+              if (id && text?.trim()) deliver(id, text.trim())
+            } catch {}
+          },
+        },
+      })
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code === 'EADDRINUSE') continue
+      throw err
+    }
+  }
+  throw new Error(`no free port in range ${tryPorts[0]}..${tryPorts[tryPorts.length - 1]}`)
+}
+
+// Bind the server — PORT is now known after this call.
+const server = startServer(PORT_CANDIDATES)
+const PORT = server.port
+
+// ---------------------------------------------------------------------------
+// MCP server — built AFTER PORT is known so instructions string is correct
+// ---------------------------------------------------------------------------
 const mcp = new Server(
   { name: 'fakechat', version: '0.1.0' },
   {
@@ -116,6 +370,16 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         const id = nextId()
         broadcast({ type: 'msg', id, from: 'assistant', text, ts: Date.now(), replyTo, file })
         ids.push(id)
+        void postIngest({
+          session_id: SESSION_ID,
+          session_name: undefined,
+          message: {
+            id,
+            direction: 'assistant',
+            ts: Date.now(),
+            content: text,
+          },
+        })
         return { content: [{ type: 'text', text: `sent (${ids.join(', ')})` }] }
       }
       case 'edit_message': {
@@ -145,67 +409,17 @@ function deliver(id: string, text: string, file?: { path: string; name: string }
       },
     },
   })
-}
-
-Bun.serve({
-  port: PORT,
-  hostname: '127.0.0.1',
-  fetch(req, server) {
-    const url = new URL(req.url)
-
-    if (url.pathname === '/ws') {
-      if (server.upgrade(req)) return
-      return new Response('upgrade failed', { status: 400 })
-    }
-
-    if (url.pathname.startsWith('/files/')) {
-      const f = url.pathname.slice(7)
-      if (f.includes('..') || f.includes('/')) return new Response('bad', { status: 400 })
-      try {
-        return new Response(readFileSync(join(OUTBOX_DIR, f)), {
-          headers: { 'content-type': mime(extname(f).toLowerCase()) },
-        })
-      } catch {
-        return new Response('404', { status: 404 })
-      }
-    }
-
-    if (url.pathname === '/upload' && req.method === 'POST') {
-      return (async () => {
-        const form = await req.formData()
-        const id = String(form.get('id') ?? '')
-        const text = String(form.get('text') ?? '')
-        const f = form.get('file')
-        if (!id) return new Response('missing id', { status: 400 })
-        let file: { path: string; name: string } | undefined
-        if (f instanceof File && f.size > 0) {
-          mkdirSync(INBOX_DIR, { recursive: true })
-          const ext = extname(f.name).toLowerCase() || '.bin'
-          const path = join(INBOX_DIR, `${Date.now()}${ext}`)
-          writeFileSync(path, Buffer.from(await f.arrayBuffer()))
-          file = { path, name: f.name }
-        }
-        deliver(id, text, file)
-        return new Response(null, { status: 204 })
-      })()
-    }
-
-    if (url.pathname === '/') {
-      return new Response(HTML, { headers: { 'content-type': 'text/html; charset=utf-8' } })
-    }
-    return new Response('404', { status: 404 })
-  },
-  websocket: {
-    open: ws => { clients.add(ws) },
-    close: ws => { clients.delete(ws) },
-    message: (_, raw) => {
-      try {
-        const { id, text } = JSON.parse(String(raw)) as { id: string; text: string }
-        if (id && text?.trim()) deliver(id, text.trim())
-      } catch {}
+  void postIngest({
+    session_id: SESSION_ID,
+    session_name: undefined,
+    message: {
+      id,
+      direction: 'user',
+      ts: Date.now(),
+      content: text || `(${file?.name ?? 'attachment'})`,
     },
-  },
-})
+  })
+}
 
 process.stderr.write(`fakechat: http://localhost:${PORT}\n`)
 
