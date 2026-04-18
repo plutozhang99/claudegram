@@ -8,7 +8,7 @@ import { handleIngest } from './routes/ingest.js';
 import { handleApiSessions } from './routes/api/sessions.js';
 import { handleApiMessages } from './routes/api/messages.js';
 import { handleApiMe } from './routes/api/me.js';
-import { handleRoot, handleWebAsset } from './routes/static.js';
+import { handleRoot, handleWebAsset, serveStaticFile } from './routes/static.js';
 
 export interface RouterCtx {
   readonly msgRepo: MessageRepo;
@@ -37,6 +37,10 @@ export async function dispatch(req: Request, ctx: RouterCtx): Promise<Response> 
 
   // Static routes
   if (path === '/') return handleRoot(req, staticDeps);
+  // Serve service worker at origin root so its default scope is `/` (can cache `/`).
+  // Registered from index.html as `/sw.js`.
+  if (path === '/sw.js' && req.method === 'GET') return serveStaticFile('sw.js', staticDeps);
+  if (path === '/sw.js') return jsonResponse(405, { ok: false, error: 'method not allowed' });
   if (path.startsWith('/web/')) return handleWebAsset(req, staticDeps);
 
   // Route: /health (all methods handled inside handleHealth)

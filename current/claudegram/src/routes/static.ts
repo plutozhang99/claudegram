@@ -57,7 +57,10 @@ export async function serveStaticFile(
   // Strict allowlist: unmapped extensions are rejected rather than served as
   // octet-stream. Prevents accidental exposure of stray `.env`, `.pem`, etc.
   const contentType = CONTENT_TYPES[ext];
-  if (!contentType) return jsonResponse(404, NOT_FOUND);
+  if (!contentType) {
+    deps.logger.debug('static_unmapped_extension', { ext, absolute });
+    return jsonResponse(404, NOT_FOUND);
+  }
 
   return new Response(file, {
     status: 200,

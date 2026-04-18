@@ -51,10 +51,11 @@ function deps() {
 
 // ── handleRoot ────────────────────────────────────────────────────────────────
 describe('handleRoot', () => {
-  it('GET / → 200, text/html, correct body', async () => {
+  it('GET / → 200, text/html, nosniff, correct body', async () => {
     const res = await handleRoot(makeReq('GET', '/'), deps());
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toContain('text/html');
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff');
     const body = await res.text();
     expect(body).toContain('hello');
   });

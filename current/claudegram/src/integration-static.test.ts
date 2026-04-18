@@ -30,9 +30,10 @@ describe('PWA static shell is served', () => {
 
   const paths = [
     ['/', 'text/html'],
+    ['/sw.js', 'application/javascript'], // served at origin root so its default scope is `/`
     ['/web/style.css', 'text/css'],
     ['/web/manifest.webmanifest', 'application/manifest+json'],
-    ['/web/sw.js', 'application/javascript'],
+    ['/web/sw.js', 'application/javascript'], // still reachable via legacy path
     ['/web/icons/icon-192.png', 'image/png'],
     ['/web/icons/icon-512.png', 'image/png'],
     ['/web/js/index.js', 'application/javascript'],
