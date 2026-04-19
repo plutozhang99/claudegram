@@ -160,6 +160,58 @@ describe("configSchema export", () => {
   });
 });
 
+describe("MAX_PWA_CONNECTIONS", () => {
+  it("accepts a valid numeric string", () => {
+    const config = loadConfig({ MAX_PWA_CONNECTIONS: "512" });
+    expect(config.maxPwaConnections).toBe(512);
+  });
+
+  it("uses default 256 when unset", () => {
+    const config = loadConfig({});
+    expect(config.maxPwaConnections).toBe(256);
+  });
+
+  it("malformed value 'abc' → throws (Zod validation fails)", () => {
+    // MED 2: the pre-guard was removed; Zod's coerce.number() now handles this.
+    // ZodError is an Error subclass, so toBeInstanceOf(Error) still holds.
+    expect(() => loadConfig({ MAX_PWA_CONNECTIONS: "abc" })).toThrow(Error);
+  });
+
+  it("value '0' → throws (not positive)", () => {
+    expect(() => loadConfig({ MAX_PWA_CONNECTIONS: "0" })).toThrow();
+  });
+
+  it("negative value '-1' → throws (not positive)", () => {
+    expect(() => loadConfig({ MAX_PWA_CONNECTIONS: "-1" })).toThrow();
+  });
+});
+
+describe("MAX_SESSION_CONNECTIONS", () => {
+  it("accepts a valid numeric string", () => {
+    const config = loadConfig({ MAX_SESSION_CONNECTIONS: "128" });
+    expect(config.maxSessionConnections).toBe(128);
+  });
+
+  it("uses default 64 when unset", () => {
+    const config = loadConfig({});
+    expect(config.maxSessionConnections).toBe(64);
+  });
+
+  it("malformed value 'abc' → throws (Zod validation fails)", () => {
+    // MED 2: the pre-guard was removed; Zod's coerce.number() now handles this.
+    // ZodError is an Error subclass, so toBeInstanceOf(Error) still holds.
+    expect(() => loadConfig({ MAX_SESSION_CONNECTIONS: "abc" })).toThrow(Error);
+  });
+
+  it("value '0' → throws (not positive)", () => {
+    expect(() => loadConfig({ MAX_SESSION_CONNECTIONS: "0" })).toThrow();
+  });
+
+  it("negative value '-1' → throws (not positive)", () => {
+    expect(() => loadConfig({ MAX_SESSION_CONNECTIONS: "-1" })).toThrow();
+  });
+});
+
 describe("WS_OUTBOUND_BUFFER_CAP_BYTES", () => {
   it("accepts a valid numeric string", () => {
     const config = loadConfig({ WS_OUTBOUND_BUFFER_CAP_BYTES: "2097152" });

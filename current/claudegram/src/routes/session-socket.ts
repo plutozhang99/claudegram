@@ -167,8 +167,22 @@ export function handleSessionSocketMessage(
     return;
   }
 
-  // Register with the session registry; evicts any prior socket for this session_id.
-  const disposable = sessionRegistry.register(session_id, ws);
+  // HIGH 1 TOCTOU fix: use tryRegister() as the authoritative cap gate.
+  // The pre-upgrade 503 is a cheap fast-fail optimisation; the register frame
+  // handler is the true enforcement point because:
+  //   a) concurrent bursts can slip past the pre-upgrade check, and
+  //   b) the cap is on registered sessions, not on open connections.
+  // Rebind of an existing session_id is always allowed regardless of cap.
+  const registerResult = sessionRegistry.tryRegister(session_id, ws);
+  if (!registerResult.ok) {
+    logger.warn('session_socket_register_cap_exceeded', { session_id });
+    // Send error frame before closing so the client gets a readable reason.
+    sendErrorFrame(ws, 'internal_error', capBytes, logger, 'register_cap_exceeded', session_id);
+    ws.close(1008, 'cap_exceeded');
+    return;
+  }
+
+  const { disposable } = registerResult;
 
   // Track per-socket state for cleanup on close.
   wsState.set(ws, { session_id, disposable });

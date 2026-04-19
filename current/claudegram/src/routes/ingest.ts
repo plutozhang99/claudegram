@@ -89,6 +89,8 @@ export async function handleIngest(
   const { session_id, session_name, message } = result.data;
 
   let sess: Readonly<Session> | null = null;
+  // ingested_at: default to Date.now() as fallback; overwritten by post-insert read below.
+  let persistedIngested_at: number = Date.now();
   try {
     // P1: wrap session upsert + message insert in a single transaction to prevent orphan session on insert failure.
     deps.sessRepo.upsert({ id: session_id, name: session_name ?? session_id, now: Date.now() });
@@ -99,6 +101,13 @@ export async function handleIngest(
       ts: message.ts,
       content: message.content,
     });
+    // Read back the inserted row to get the actual ingested_at from the DB.
+    // This eliminates the 1-2ms drift that occurred when using Date.now() at
+    // broadcast time: the DB sets ingested_at via unixepoch('subsec')*1000.
+    const persisted = deps.msgRepo.findById(session_id, message.id);
+    if (persisted !== null) {
+      persistedIngested_at = persisted.ingested_at;
+    }
     // Fetch the final session state for broadcast (has status, last_read_at).
     sess = deps.sessRepo.findById(session_id);
   } catch (err: unknown) {
@@ -112,9 +121,6 @@ export async function handleIngest(
 
   // Broadcast events to connected WebSocket clients — best-effort, never fails ingest.
   try {
-    // ingested_at is the DB default (unixepoch('subsec')*1000); we approximate with
-    // Date.now() which is always >= the DB value and correct within ~1-2ms.
-    const broadcastIngestedAt = Date.now();
     deps.hub.broadcast({
       type: 'message',
       session_id,
@@ -124,7 +130,7 @@ export async function handleIngest(
         direction: message.direction,
         ts: message.ts,
         content: message.content,
-        ingested_at: broadcastIngestedAt, // wall-clock estimate; may drift 1-2ms from DB value
+        ingested_at: persistedIngested_at, // actual DB value from post-insert read (P2.5 fix)
       },
     });
     if (sess !== null) {

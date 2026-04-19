@@ -198,6 +198,27 @@ describe('handleUserSocketMessage — reply', () => {
     expect((payload as Record<string, unknown>).reply_to).toBe('m_parent');
   });
 
+  it('buffer_full → error frame {type:error, reason:send_failed} sent to PWA (internal reason not exposed)', () => {
+    const sendMock = mock(() => ({ ok: false as const, reason: 'buffer_full' as const }));
+    const deps = makeDeps({ sessionRegistry: { send: sendMock } });
+
+    const frame = JSON.stringify({
+      type: 'reply',
+      session_id: 's1',
+      text: 'Hi',
+      client_msg_id: 'cid-buf',
+    });
+    handleUserSocketMessage(ws, frame, deps);
+
+    expect(ws.sentMessages.length).toBe(1);
+    const errFrame = JSON.parse(ws.sentMessages[0]);
+    expect(errFrame.type).toBe('error');
+    // 'buffer_full' is internal — PWA sees 'send_failed', NOT 'buffer_full'
+    expect(errFrame.reason).toBe('send_failed');
+    expect(errFrame.session_id).toBe('s1');
+    expect(errFrame.client_msg_id).toBe('cid-buf');
+  });
+
   it('MED 4. send_failed → logger.warn called before error frame', () => {
     const sendMock = mock(() => ({ ok: false as const, reason: 'send_failed' as const }));
     const logger = makeLogger();

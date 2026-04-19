@@ -71,9 +71,9 @@ function handleReplyFrame(
     return;
   }
 
-  // HIGH 2: exhaustive switch on SendResult.reason — adding a new arm to the
-  // registry's SendResult union (e.g. 'buffer_full' in P2.5) becomes a compile
-  // error here unless this switch is updated.
+  // HIGH 2: exhaustive switch on SendResult.reason — every arm of the
+  // SendResult union must be handled here. The 'buffer_full' arm was added in
+  // P2.5; the never-typed default catches any future additions at compile time.
   let reason: WsErrorReason;
   switch (result.reason) {
     case 'no_session':
@@ -83,6 +83,12 @@ function handleReplyFrame(
     case 'send_failed':
       // MED 4: warn-log send_failed before sending error frame
       logger.warn('user_socket_reply_send_failed', { session_id, client_msg_id });
+      reason = 'send_failed';
+      break;
+    case 'buffer_full':
+      // 'buffer_full' is an internal backpressure signal; surface to PWA as
+      // 'send_failed' to keep the public WsErrorReason union narrow.
+      logger.warn('user_socket_reply_buffer_full', { session_id, client_msg_id });
       reason = 'send_failed';
       break;
     default: {

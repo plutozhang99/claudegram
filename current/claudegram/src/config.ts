@@ -30,6 +30,16 @@ export const configSchema = z.object({
     .int()
     .positive()
     .default(5),
+  maxPwaConnections: z
+    .coerce.number()
+    .int()
+    .positive()
+    .default(256),
+  maxSessionConnections: z
+    .coerce.number()
+    .int()
+    .positive()
+    .default(64),
 });
 
 export type Config = z.infer<typeof configSchema>;
@@ -55,6 +65,11 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     }
   }
 
+  // MED 2: MAX_PWA_CONNECTIONS and MAX_SESSION_CONNECTIONS are validated directly
+  // by Zod's z.coerce.number().int().positive() — no manual pre-guard needed.
+  // The redundant Number.isFinite block has been removed; the Zod error names the
+  // field via its path array, which is sufficient for debugging.
+
   return configSchema.parse({
     port: env["CLAUDEGRAM_PORT"],
     db_path: env["CLAUDEGRAM_DB_PATH"],
@@ -62,5 +77,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     trustCfAccess: env["TRUST_CF_ACCESS"] === "true",
     wsOutboundBufferCapBytes: rawCap,
     wsInboundMaxBadFrames: rawMaxBadFrames,
+    maxPwaConnections: env["MAX_PWA_CONNECTIONS"],
+    maxSessionConnections: env["MAX_SESSION_CONNECTIONS"],
   });
 }

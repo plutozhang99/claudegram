@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'bun:test';
 import type { ServerWebSocket } from 'bun';
 import { InMemorySessionRegistry } from './session-registry.js';
-import type { OutboundSessionPayload } from './session-registry.js';
+import type { OutboundSessionPayload, TryRegisterResult } from './session-registry.js';
 
 // ── Stub WebSocket ────────────────────────────────────────────────────────────
 
@@ -10,6 +10,10 @@ interface StubWsOptions {
   onClose?: (code: number, reason: string) => void;
   throwOnClose?: boolean;
   throwOnSend?: boolean;
+  /** Simulated bufferedAmount value for backpressure tests. Default: 0. */
+  bufferedAmount?: number;
+  /** If true, getBufferedAmount() throws — tests HIGH 2 fix. */
+  throwOnGetBufferedAmount?: boolean;
 }
 
 function makeStubWs(opts: StubWsOptions = {}): ServerWebSocket<unknown> {
@@ -22,6 +26,10 @@ function makeStubWs(opts: StubWsOptions = {}): ServerWebSocket<unknown> {
     close: (code?: number, reason?: string) => {
       if (opts.throwOnClose) throw new Error('already closed');
       opts.onClose?.(code ?? 1000, reason ?? '');
+    },
+    getBufferedAmount: () => {
+      if (opts.throwOnGetBufferedAmount) throw new Error('socket in terminal state');
+      return opts.bufferedAmount ?? 0;
     },
     data: undefined,
     readyState: 1,
@@ -245,5 +253,126 @@ describe('InMemorySessionRegistry', () => {
     const result = registry.send('sess-1', stubPayload);
     expect(result).toEqual({ ok: true });
     expect(newReceived).toHaveLength(1);
+  });
+
+  // ── P2.5 new tests ────────────────────────────────────────────────────────
+
+  it('tryRegister returns {ok:true, disposable} when under cap', () => {
+    const registry = new InMemorySessionRegistry(3);
+    const ws = makeStubWs();
+    const result: TryRegisterResult = registry.tryRegister('sess-1', ws);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(typeof result.disposable[Symbol.dispose]).toBe('function');
+    }
+    expect(registry.size).toBe(1);
+  });
+
+  it('tryRegister returns {ok:false, reason:"cap_exceeded"} when at capacity (new session)', () => {
+    const registry = new InMemorySessionRegistry(2);
+    registry.tryRegister('sess-a', makeStubWs());
+    registry.tryRegister('sess-b', makeStubWs());
+    // At cap
+    const result: TryRegisterResult = registry.tryRegister('sess-c', makeStubWs());
+    expect(result).toEqual({ ok: false, reason: 'cap_exceeded' });
+    expect(registry.size).toBe(2); // unchanged
+  });
+
+  it('tryRegister allows rebind of existing session_id even when at cap', () => {
+    const registry = new InMemorySessionRegistry(1);
+    registry.tryRegister('sess-1', makeStubWs());
+    // At cap — but rebind is always allowed
+    const result: TryRegisterResult = registry.tryRegister('sess-1', makeStubWs());
+    expect(result.ok).toBe(true);
+    expect(registry.size).toBe(1); // size stays at 1 after eviction+rebind
+  });
+
+  it('send() returns {ok:false, reason:"buffer_full"} when target socket bufferedAmount exceeds cap', () => {
+    // Cap: 1 MB (default). Stub a ws with bufferedAmount > cap.
+    const capBytes = 1_048_576;
+    const registry = new InMemorySessionRegistry(64, capBytes);
+    const ws = makeStubWs({ bufferedAmount: capBytes + 1 });
+    registry.register('sess-1', ws);
+
+    const result = registry.send('sess-1', stubPayload);
+    expect(result).toEqual({ ok: false, reason: 'buffer_full' });
+  });
+
+  it('send() returns {ok:true} when target socket bufferedAmount is exactly at cap (not over)', () => {
+    const capBytes = 1_048_576;
+    const registry = new InMemorySessionRegistry(64, capBytes);
+    const received: string[] = [];
+    const ws = makeStubWs({ bufferedAmount: capBytes, onSend: (d) => received.push(d) });
+    registry.register('sess-1', ws);
+
+    const result = registry.send('sess-1', stubPayload);
+    expect(result).toEqual({ ok: true });
+    expect(received).toHaveLength(1);
+  });
+
+  // ── HIGH 2 fix tests ──────────────────────────────────────────────────────
+
+  it('send() returns {ok:false, reason:"send_failed"} when getBufferedAmount() throws (does not propagate)', () => {
+    // HIGH 2: getBufferedAmount() is now wrapped in its own try/catch.
+    // A throwing implementation should not propagate — it returns send_failed.
+    const registry = new InMemorySessionRegistry();
+    const ws = makeStubWs({ throwOnGetBufferedAmount: true });
+    registry.register('sess-1', ws);
+
+    let threw = false;
+    let result: ReturnType<typeof registry.send> | undefined;
+    try {
+      result = registry.send('sess-1', stubPayload);
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(false);
+    expect(result).toEqual({ ok: false, reason: 'send_failed' });
+  });
+
+  it('send() with injected logger calls logger.warn when getBufferedAmount() throws', () => {
+    // HIGH 3: verify the injected logger is called (not bare console.warn).
+    const warnCalls: Array<{ msg: string; fields?: Record<string, unknown> }> = [];
+    const mockLogger = {
+      debug: () => {},
+      info: () => {},
+      warn: (msg: string, fields?: Record<string, unknown>) => { warnCalls.push({ msg, fields }); },
+      error: () => {},
+    };
+
+    const registry = new InMemorySessionRegistry(64, 1_048_576, mockLogger);
+    const ws = makeStubWs({ throwOnGetBufferedAmount: true });
+    registry.register('sess-1', ws);
+
+    registry.send('sess-1', stubPayload);
+
+    expect(warnCalls.length).toBeGreaterThan(0);
+    expect(warnCalls[0]!.msg).toBe('session_registry_get_buffered_amount_failed');
+  });
+
+  // ── HIGH 1 burst test ─────────────────────────────────────────────────────
+
+  it('tryRegister concurrent burst: hub.size never exceeds cap after N+5 opens', () => {
+    // HIGH 1: simulate N+5 concurrent tryRegister calls where cap is N.
+    // This mirrors the TOCTOU scenario — all calls arrive before any are processed.
+    const cap = 5;
+    const registry = new InMemorySessionRegistry(cap);
+    const results: Array<ReturnType<typeof registry.tryRegister>> = [];
+
+    // Simulate N+5 concurrent attempts (synchronous in this runtime, but proves cap enforcement)
+    for (let i = 0; i < cap + 5; i++) {
+      results.push(registry.tryRegister(`sess-${i}`, makeStubWs()));
+    }
+
+    // Count successes and failures
+    const successes = results.filter(r => r.ok);
+    const failures = results.filter(r => !r.ok);
+
+    expect(successes).toHaveLength(cap);
+    expect(failures).toHaveLength(5);
+    failures.forEach(r => {
+      expect(r).toEqual({ ok: false, reason: 'cap_exceeded' });
+    });
+    expect(registry.size).toBe(cap);
   });
 });

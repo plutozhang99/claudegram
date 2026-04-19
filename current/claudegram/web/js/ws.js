@@ -30,7 +30,10 @@ export function createWsClient(url) {
     const set = handlers.get(type);
     if (!set) return;
     for (const handler of set) {
-      try { handler(payload); } catch (e) { console.warn('ws handler error', String(e)); }
+      try { handler(payload); } catch (e) {
+        console.error('ws handler error', e);
+        if (window.CLAUDEGRAM_DEBUG) console.warn('ws handler debug context', e);
+      }
     }
   }
 

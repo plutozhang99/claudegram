@@ -61,8 +61,8 @@ export function createServer(deps: ServerDeps): RunningServer {
 
   const msgRepo = new SqliteMessageRepo(db);
   const sessRepo = new SqliteSessionRepo(db);
-  const hub = deps.hub ?? new InMemoryHub();
-  const sessionRegistry = deps.sessionRegistry ?? new InMemorySessionRegistry();
+  const hub = deps.hub ?? new InMemoryHub(config.maxPwaConnections);
+  const sessionRegistry = deps.sessionRegistry ?? new InMemorySessionRegistry(config.maxSessionConnections, config.wsOutboundBufferCapBytes, logger);
   const webRoot = path.resolve(deps.webRoot ?? path.join(process.cwd(), 'web'));
   const ctx = { msgRepo, sessRepo, logger, db, hub, config, webRoot };
 
@@ -87,6 +87,13 @@ export function createServer(deps: ServerDeps): RunningServer {
         url.pathname === '/session-socket' &&
         req.headers.get('upgrade')?.toLowerCase() === 'websocket'
       ) {
+        // MED 1: cap check BEFORE auth — a flood of unauthenticated upgrade
+        // attempts past cap shouldn't burn the header-parse cost.
+        if (sessionRegistry.size >= config.maxSessionConnections) {
+          return new Response('too many connections', { status: 503 });
+        }
+
+        // Auth gate runs after cap check.
         const authError = checkSessionSocketAuth(req, config);
         if (authError !== null) return authError;
 
@@ -102,6 +109,11 @@ export function createServer(deps: ServerDeps): RunningServer {
         url.pathname === '/user-socket' &&
         req.headers.get('upgrade')?.toLowerCase() === 'websocket'
       ) {
+        // Cap check: pre-upgrade 503 when hub is at capacity.
+        if (hub.size >= config.maxPwaConnections) {
+          return new Response('too many connections', { status: 503 });
+        }
+
         const upgraded = bunServer.upgrade(req, {
           data: { kind: 'user-socket' } satisfies UserSocketData,
         });
@@ -115,10 +127,19 @@ export function createServer(deps: ServerDeps): RunningServer {
     websocket: {
       open: (ws) => {
         if (ws.data.kind === 'user-socket') {
-          hub.add(ws);
+          // HIGH 1 TOCTOU fix: use tryAdd() as the authoritative cap gate.
+          // The pre-upgrade 503 is a cheap fast-fail optimisation, but `open`
+          // runs in a later event-loop turn — concurrent bursts can slip through.
+          const result = hub.tryAdd(ws);
+          if (!result.ok) {
+            logger.warn('ws_open_cap_exceeded', { kind: 'user-socket' });
+            ws.close(1008, 'cap_exceeded');
+            return;
+          }
           logger.info('ws_open', { size: hub.size });
         } else {
           // kind === 'session-socket'
+          // Registration happens in the message handler (register frame), not here.
           handleSessionSocketOpen(ws, { logger });
         }
       },

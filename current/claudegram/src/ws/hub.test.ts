@@ -2,6 +2,7 @@ import { describe, it, expect } from 'bun:test';
 import type { ServerWebSocket } from 'bun';
 import { InMemoryHub } from './hub.js';
 import type { BroadcastPayload } from './hub.js';
+import type { TryAddResult } from './hub.js';
 
 // ── Stub WebSocket ────────────────────────────────────────────────────────────
 
@@ -141,5 +142,52 @@ describe('InMemoryHub', () => {
     // Same string identity is guaranteed because all sends use the one `text` var
     expect(seen[0]).toBe(seen[1]);
     expect(seen[0]).toBe(JSON.stringify(payload));
+  });
+
+  // ── P2.5 cap-enforcement tests ────────────────────────────────────────────
+
+  it('tryAdd returns {ok:true} when under cap', () => {
+    const hub = new InMemoryHub(3);
+    const ws = makeStubWs();
+    const result: TryAddResult = hub.tryAdd(ws);
+    expect(result).toEqual({ ok: true });
+    expect(hub.size).toBe(1);
+  });
+
+  it('tryAdd returns {ok:false, reason:"cap_exceeded"} when at capacity', () => {
+    const hub = new InMemoryHub(2);
+    hub.tryAdd(makeStubWs());
+    hub.tryAdd(makeStubWs());
+    // Now at cap
+    const result: TryAddResult = hub.tryAdd(makeStubWs());
+    expect(result).toEqual({ ok: false, reason: 'cap_exceeded' });
+    expect(hub.size).toBe(2); // size unchanged
+  });
+
+  it('tryAdd: fill to cap N, N+1 is rejected, remove one and N+1 succeeds', () => {
+    const cap = 3;
+    const hub = new InMemoryHub(cap);
+    const sockets: ServerWebSocket<unknown>[] = [];
+    for (let i = 0; i < cap; i++) {
+      const ws = makeStubWs();
+      sockets.push(ws);
+      hub.tryAdd(ws);
+    }
+    expect(hub.size).toBe(cap);
+
+    // N+1 rejected
+    expect(hub.tryAdd(makeStubWs())).toEqual({ ok: false, reason: 'cap_exceeded' });
+
+    // Remove one → slot freed → next tryAdd succeeds
+    hub.remove(sockets[0]!);
+    expect(hub.tryAdd(makeStubWs())).toEqual({ ok: true });
+    expect(hub.size).toBe(cap);
+  });
+
+  it('deprecated add() does not enforce cap (backward compat)', () => {
+    const hub = new InMemoryHub(1);
+    hub.tryAdd(makeStubWs()); // fills cap
+    hub.add(makeStubWs());    // deprecated path — no cap check
+    expect(hub.size).toBe(2);
   });
 });

@@ -22,6 +22,7 @@ const noopLogger: Logger = {
 function makeStubHub(): Hub {
   return {
     add: () => {},
+    tryAdd: () => ({ ok: true as const }),
     remove: () => {},
     broadcast: (_payload: BroadcastPayload) => {},
     get size() { return 0; },
@@ -82,6 +83,8 @@ describe('POST /ingest', () => {
         trustCfAccess: false,
         wsOutboundBufferCapBytes: 1_048_576,
         wsInboundMaxBadFrames: 5,
+        maxPwaConnections: 256,
+        maxSessionConnections: 64,
       },
       webRoot: '/tmp/__claudegram_test_nonexistent_web__',
     };
@@ -306,6 +309,8 @@ describe('POST /ingest', () => {
         trustCfAccess: false,
         wsOutboundBufferCapBytes: 1_048_576,
         wsInboundMaxBadFrames: 5,
+        maxPwaConnections: 256,
+        maxSessionConnections: 64,
       },
       webRoot: '/tmp/__claudegram_test_nonexistent_web__',
     };
@@ -331,6 +336,7 @@ describe('POST /ingest', () => {
     const broadcasts: BroadcastPayload[] = [];
     const spyHub: Hub = {
       add: () => {},
+      tryAdd: () => ({ ok: true as const }),
       remove: () => {},
       broadcast: (payload: BroadcastPayload) => { broadcasts.push(payload); },
       get size() { return 0; },
@@ -354,6 +360,7 @@ describe('POST /ingest', () => {
     const broadcasts: BroadcastPayload[] = [];
     const spyHub: Hub = {
       add: () => {},
+      tryAdd: () => ({ ok: true as const }),
       remove: () => {},
       broadcast: (payload: BroadcastPayload) => { broadcasts.push(payload); },
       get size() { return 0; },
@@ -371,6 +378,7 @@ describe('POST /ingest', () => {
     const broadcasts: BroadcastPayload[] = [];
     const spyHub: Hub = {
       add: () => {},
+      tryAdd: () => ({ ok: true as const }),
       remove: () => {},
       broadcast: (payload: BroadcastPayload) => { broadcasts.push(payload); },
       get size() { return 0; },
@@ -391,6 +399,7 @@ describe('POST /ingest', () => {
     const broadcasts: BroadcastPayload[] = [];
     const spyHub: Hub = {
       add: () => {},
+      tryAdd: () => ({ ok: true as const }),
       remove: () => {},
       broadcast: (payload: BroadcastPayload) => { broadcasts.push(payload); },
       get size() { return 0; },
@@ -423,6 +432,8 @@ describe('POST /ingest', () => {
         trustCfAccess: false,
         wsOutboundBufferCapBytes: 1_048_576,
         wsInboundMaxBadFrames: 5,
+        maxPwaConnections: 256,
+        maxSessionConnections: 64,
       },
       webRoot: '/tmp/__claudegram_test_nonexistent_web__',
     };
@@ -437,6 +448,7 @@ describe('POST /ingest', () => {
   it('returns 200 even when hub.broadcast throws (best-effort broadcast)', async () => {
     const throwingHub: Hub = {
       add: () => {},
+      tryAdd: () => ({ ok: true as const }),
       remove: () => {},
       broadcast: (_payload: BroadcastPayload) => { throw new Error('hub exploded'); },
       get size() { return 0; },
@@ -448,5 +460,35 @@ describe('POST /ingest', () => {
     const body = await res.json() as { ok: boolean; message_id: string };
     expect(body.ok).toBe(true);
     expect(body.message_id).toBe('m1');
+  });
+
+  // ── P2.5: post-insert ingested_at read (fix D) ───────────────────────────
+
+  // Case 16: broadcast ingested_at matches the DB row's ingested_at (not Date.now() drift)
+  it('P2.5 fix D: broadcast ingested_at matches the DB row value (not a Date.now() approximation)', async () => {
+    const broadcasts: BroadcastPayload[] = [];
+    const spyHub: Hub = {
+      add: () => {},
+      tryAdd: () => ({ ok: true as const }),
+      remove: () => {},
+      broadcast: (payload: BroadcastPayload) => { broadcasts.push(payload); },
+      get size() { return 0; },
+    };
+
+    const req = makeReq('POST', '/ingest', validPayload);
+    const res = await dispatch(req, { ...ctx, hub: spyHub });
+    expect(res.status).toBe(200);
+
+    // The broadcast must have fired with a message payload
+    const msgBroadcast = broadcasts.find((b) => b.type === 'message') as Extract<BroadcastPayload, { type: 'message' }> | undefined;
+    expect(msgBroadcast).toBeDefined();
+
+    // The actual DB row for this message
+    const dbMsg = msgRepo.findById('s1', 'm1');
+    expect(dbMsg).not.toBeNull();
+
+    // Key assertion: broadcast ingested_at must exactly equal the DB row's ingested_at,
+    // NOT an approximate Date.now() value (which could drift 1-2ms).
+    expect(msgBroadcast!.message.ingested_at).toBe(dbMsg!.ingested_at);
   });
 });

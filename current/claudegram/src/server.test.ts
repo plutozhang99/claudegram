@@ -7,13 +7,14 @@ import { InMemoryHub } from './ws/hub.js';
 import type { Config } from './config.js';
 import { createLogger } from './logger.js';
 import { InMemorySessionRegistry } from './ws/session-registry.js';
+import type { Hub, TryAddResult } from './ws/hub.js';
 
 // Use a port range that avoids collision with common services.
 const BASE_PORT = 38000 + (process.pid % 1000);
 
 function makeConfig(port: number): Config {
   // Bypass Zod to allow port=0-style ephemeral. Tests use explicit high ports.
-  return { port, db_path: ':memory:', log_level: 'error', trustCfAccess: false, wsOutboundBufferCapBytes: 1_048_576, wsInboundMaxBadFrames: 5 };
+  return { port, db_path: ':memory:', log_level: 'error', trustCfAccess: false, wsOutboundBufferCapBytes: 1_048_576, wsInboundMaxBadFrames: 5, maxPwaConnections: 256, maxSessionConnections: 64 };
 }
 
 const logger = createLogger({ level: 'error' });
@@ -131,6 +132,133 @@ describe('WebSocket /user-socket', () => {
     // Should be a 404 (no upgrade header, falls through to dispatch)
     expect(res.status).toBeGreaterThanOrEqual(400);
     expect(hub.size).toBe(0);
+  });
+});
+
+// ── P2.5: pre-upgrade 503 cap tests ──────────────────────────────────────────
+
+describe('pre-upgrade 503 cap enforcement', () => {
+  it('/user-socket: upgrade attempt when hub is at capacity returns 503', async () => {
+    // Create a hub that reports it's at cap (size >= maxPwaConnections).
+    // Use a stub hub with size === maxPwaConnections so the cap check fires.
+    const maxPwa = 2;
+    const config = makeConfig(nextPort());
+    const cappedConfig: Config = { ...config, maxPwaConnections: maxPwa };
+
+    // A real hub filled to cap
+    const hub = new InMemoryHub(maxPwa);
+    // Fill with stubs using the deprecated add() to bypass cap for setup purposes
+    hub.add({ send: () => 0 } as unknown as Parameters<typeof hub.add>[0]);
+    hub.add({ send: () => 0 } as unknown as Parameters<typeof hub.add>[0]);
+    expect(hub.size).toBe(maxPwa);
+
+    server = createServer({ config: cappedConfig, db, logger, hub });
+
+    // WebSocket upgrade request (plain HTTP with Upgrade header)
+    const res = await fetch(`http://localhost:${server.port}/user-socket`, {
+      headers: { Upgrade: 'websocket', Connection: 'Upgrade', 'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ==', 'Sec-WebSocket-Version': '13' },
+      signal: AbortSignal.timeout(2000),
+    });
+    expect(res.status).toBe(503);
+    const body = await res.text();
+    expect(body).toBe('too many connections');
+  });
+
+  it('/session-socket: upgrade attempt when registry is at capacity returns 503', async () => {
+    const maxSession = 1;
+    const config = makeConfig(nextPort());
+    const cappedConfig: Config = { ...config, maxSessionConnections: maxSession };
+
+    // A real registry filled to cap
+    const sessionRegistry = new InMemorySessionRegistry(maxSession);
+    // Fill with a stub ws using register() directly
+    sessionRegistry.register('fake-sess', { send: () => 0, close: () => {} } as unknown as Parameters<typeof sessionRegistry.register>[1]);
+    expect(sessionRegistry.size).toBe(maxSession);
+
+    server = createServer({ config: cappedConfig, db, logger, sessionRegistry });
+
+    const res = await fetch(`http://localhost:${server.port}/session-socket`, {
+      headers: { Upgrade: 'websocket', Connection: 'Upgrade', 'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ==', 'Sec-WebSocket-Version': '13' },
+      signal: AbortSignal.timeout(2000),
+    });
+    expect(res.status).toBe(503);
+    const body = await res.text();
+    expect(body).toBe('too many connections');
+  });
+});
+
+// ── HIGH 1 TOCTOU: tryAdd called in open handler, hub.size never exceeds cap ──
+//
+// Integration-level proof: open cap+3 real WS connections where hub.size always
+// reports 0 (TOCTOU simulation). tryAdd enforces cap; surplus get 1008.
+// Done here as a single sequential-connect test to avoid Bun test-runner hang
+// when multiple WebSocket promises are awaited concurrently.
+
+describe('HIGH 1 TOCTOU — tryAdd authoritative gate in open handler', () => {
+  it('open() calls tryAdd() — hub.size cannot exceed cap even if pre-upgrade check is bypassed', async () => {
+    const cap = 2;
+    let tryAddCallCount = 0;
+    let tryAddCapExceededCount = 0;
+
+    const realHub = new InMemoryHub(cap);
+    const stubHub: Hub = {
+      tryAdd: (ws) => {
+        tryAddCallCount++;
+        const result: TryAddResult = realHub.tryAdd(ws);
+        if (!result.ok) tryAddCapExceededCount++;
+        return result;
+      },
+      add: (ws) => realHub.add(ws),
+      remove: (ws) => realHub.remove(ws),
+      broadcast: (payload) => realHub.broadcast(payload),
+      // size always reports 0 so all upgrades bypass the pre-upgrade 503 check.
+      // The open() handler's tryAdd() is the real enforcement point.
+      get size() { return 0; },
+    };
+
+    const config: Config = { ...makeConfig(nextPort()), maxPwaConnections: cap };
+    server = createServer({ config, db, logger, hub: stubHub });
+    const testPort = server.port;
+
+    // Open cap+3 connections sequentially; each waits for open/close/error before
+    // the next. This avoids the Bun test-runner event-loop interaction that causes
+    // Promise.all on concurrent WS connections to hang.
+    const burst = cap + 3;
+    const sockets: WebSocket[] = [];
+
+    for (let i = 0; i < burst; i++) {
+      const ws = new WebSocket(`ws://localhost:${testPort}/user-socket`);
+      sockets.push(ws);
+      await new Promise<void>((resolve) => {
+        ws.onopen = () => resolve();
+        ws.onclose = () => resolve();
+        ws.onerror = () => resolve();
+        setTimeout(resolve, 2000);
+      });
+      // Short yield so the server open-handler runs before the next connect.
+      await new Promise<void>((r) => setTimeout(r, 10));
+    }
+
+    // Allow all server-side open handlers to complete.
+    await new Promise<void>((r) => setTimeout(r, 50));
+
+    // Every socket was upgraded (hub.size=0 bypasses pre-upgrade 503).
+    expect(tryAddCallCount).toBe(burst);
+    // tryAdd rejected the surplus.
+    expect(tryAddCapExceededCount).toBe(burst - cap);
+    // The hub never exceeded cap.
+    expect(realHub.size).toBeLessThanOrEqual(cap);
+
+    // Close client sockets first.
+    for (const ws of sockets) {
+      try { ws.close(); } catch { /* already closed by server */ }
+    }
+    // Give server close handlers time to run, then stop without drain.
+    // We set server=null to skip the afterEach's stop(true) which would hang
+    // waiting for Bun to drain connections that are in TCP FIN_WAIT state.
+    await new Promise<void>((r) => setTimeout(r, 200));
+    void server.stop(false); // fire-and-forget; non-awaited to avoid Bun hang
+    server = null as unknown as RunningServer;
   });
 });
 

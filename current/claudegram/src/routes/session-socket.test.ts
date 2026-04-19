@@ -30,6 +30,8 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     trustCfAccess: false,
     wsOutboundBufferCapBytes: 1_048_576,
     wsInboundMaxBadFrames: 5,
+    maxPwaConnections: 256,
+    maxSessionConnections: 64,
     ...overrides,
   };
 }
@@ -83,6 +85,15 @@ function makeSessionRegistry(overrides: Partial<SessionRegistry> = {}): SessionR
       _size++;
       return {
         [Symbol.dispose]: () => { _size = Math.max(0, _size - 1); },
+      };
+    },
+    tryRegister: (_id: string, _ws: ServerWebSocket<unknown>) => {
+      _size++;
+      return {
+        ok: true as const,
+        disposable: {
+          [Symbol.dispose]: () => { _size = Math.max(0, _size - 1); },
+        },
       };
     },
     unregister: (_id: string) => { _size = Math.max(0, _size - 1); },
@@ -197,18 +208,19 @@ describe('sendWithBackpressure', () => {
 // ── Register message handling tests ──────────────────────────────────────────
 
 describe('handleSessionSocketMessage — register', () => {
-  it('valid register → sessRepo.upsert called + sessionRegistry.register called', () => {
+  it('valid register → sessRepo.upsert called + sessionRegistry.tryRegister called', () => {
     const upsertCalls: Array<{ id: string; name: string }> = [];
-    const registerCalls: string[] = [];
+    const tryRegisterCalls: string[] = [];
 
     const sessRepo = makeSessionRepo({
       upsert: (s) => { upsertCalls.push({ id: s.id, name: s.name }); },
     });
     const sessionRegistry = makeSessionRegistry({
-      register: (id, ws) => {
-        registerCalls.push(id);
+      tryRegister: (id, _ws) => {
+        tryRegisterCalls.push(id);
         return {
-          [Symbol.dispose]: () => {},
+          ok: true as const,
+          disposable: { [Symbol.dispose]: () => {} },
         };
       },
     });
@@ -231,8 +243,8 @@ describe('handleSessionSocketMessage — register', () => {
     expect(upsertCalls).toHaveLength(1);
     expect(upsertCalls[0]!.id).toBe('sess-abc');
     expect(upsertCalls[0]!.name).toBe('sess-abc'); // defaults to session_id
-    expect(registerCalls).toHaveLength(1);
-    expect(registerCalls[0]).toBe('sess-abc');
+    expect(tryRegisterCalls).toHaveLength(1);
+    expect(tryRegisterCalls[0]).toBe('sess-abc');
   });
 
   it('valid register with session_name → upsert uses provided name', () => {
@@ -262,11 +274,11 @@ describe('handleSessionSocketMessage — register', () => {
 
   it('malformed JSON → sends error frame, no registry call', () => {
     const sent: string[] = [];
-    const registerCalls: string[] = [];
+    const tryRegisterCalls: string[] = [];
 
     const ws = makeStubWs({ onSend: (d) => sent.push(d) });
     const sessionRegistry = makeSessionRegistry({
-      register: (id, _ws) => { registerCalls.push(id); return { [Symbol.dispose]: () => {} }; },
+      tryRegister: (id, _ws) => { tryRegisterCalls.push(id); return { ok: true as const, disposable: { [Symbol.dispose]: () => {} } }; },
     });
 
     const deps = {
@@ -281,16 +293,16 @@ describe('handleSessionSocketMessage — register', () => {
 
     expect(sent).toHaveLength(1);
     expect(JSON.parse(sent[0]!)).toEqual({ type: 'error', reason: 'invalid_payload' });
-    expect(registerCalls).toHaveLength(0);
+    expect(tryRegisterCalls).toHaveLength(0);
   });
 
   it('register frame with missing session_id → sends error frame, no registry call', () => {
     const sent: string[] = [];
-    const registerCalls: string[] = [];
+    const tryRegisterCalls: string[] = [];
 
     const ws = makeStubWs({ onSend: (d) => sent.push(d) });
     const sessionRegistry = makeSessionRegistry({
-      register: (id, _ws) => { registerCalls.push(id); return { [Symbol.dispose]: () => {} }; },
+      tryRegister: (id, _ws) => { tryRegisterCalls.push(id); return { ok: true as const, disposable: { [Symbol.dispose]: () => {} } }; },
     });
 
     const deps = {
@@ -309,16 +321,16 @@ describe('handleSessionSocketMessage — register', () => {
 
     expect(sent).toHaveLength(1);
     expect(JSON.parse(sent[0]!)).toEqual({ type: 'error', reason: 'invalid_payload' });
-    expect(registerCalls).toHaveLength(0);
+    expect(tryRegisterCalls).toHaveLength(0);
   });
 
   it('register frame with empty session_id → sends error frame, no registry call', () => {
     const sent: string[] = [];
-    const registerCalls: string[] = [];
+    const tryRegisterCalls: string[] = [];
 
     const ws = makeStubWs({ onSend: (d) => sent.push(d) });
     const sessionRegistry = makeSessionRegistry({
-      register: (id, _ws) => { registerCalls.push(id); return { [Symbol.dispose]: () => {} }; },
+      tryRegister: (id, _ws) => { tryRegisterCalls.push(id); return { ok: true as const, disposable: { [Symbol.dispose]: () => {} } }; },
     });
 
     const deps = {
@@ -337,17 +349,17 @@ describe('handleSessionSocketMessage — register', () => {
 
     expect(sent).toHaveLength(1);
     expect(JSON.parse(sent[0]!)).toEqual({ type: 'error', reason: 'invalid_payload' });
-    expect(registerCalls).toHaveLength(0);
+    expect(tryRegisterCalls).toHaveLength(0);
   });
 
   it('unknown frame type → debug-logged and dropped (no error frame, no registry call)', () => {
     const sent: string[] = [];
     const debugCalls: string[] = [];
-    const registerCalls: string[] = [];
+    const tryRegisterCalls: string[] = [];
 
     const ws = makeStubWs({ onSend: (d) => sent.push(d) });
     const sessionRegistry = makeSessionRegistry({
-      register: (id, _ws) => { registerCalls.push(id); return { [Symbol.dispose]: () => {} }; },
+      tryRegister: (id, _ws) => { tryRegisterCalls.push(id); return { ok: true as const, disposable: { [Symbol.dispose]: () => {} } }; },
     });
     const logger: Logger = {
       ...noopLogger,
@@ -365,20 +377,20 @@ describe('handleSessionSocketMessage — register', () => {
     handleSessionSocketMessage(ws, JSON.stringify({ type: 'ping' }), deps);
 
     expect(sent).toHaveLength(0);
-    expect(registerCalls).toHaveLength(0);
+    expect(tryRegisterCalls).toHaveLength(0);
     expect(debugCalls).toContain('session_socket_unknown_frame');
   });
 
   // HIGH 3 test: upsert throws → error frame carries reason: 'internal_error'
   it('sessRepo.upsert throws → sends error frame with reason: internal_error, no registry call', () => {
     const sent: string[] = [];
-    const registerCalls: string[] = [];
+    const tryRegisterCalls: string[] = [];
 
     const sessRepo = makeSessionRepo({
       upsert: () => { throw new Error('DB write failed'); },
     });
     const sessionRegistry = makeSessionRegistry({
-      register: (id, _ws) => { registerCalls.push(id); return { [Symbol.dispose]: () => {} }; },
+      tryRegister: (id, _ws) => { tryRegisterCalls.push(id); return { ok: true as const, disposable: { [Symbol.dispose]: () => {} } }; },
     });
 
     const ws = makeStubWs({ onSend: (d) => sent.push(d) });
@@ -398,7 +410,42 @@ describe('handleSessionSocketMessage — register', () => {
 
     expect(sent).toHaveLength(1);
     expect(JSON.parse(sent[0]!)).toEqual({ type: 'error', reason: 'internal_error' });
-    expect(registerCalls).toHaveLength(0);
+    expect(tryRegisterCalls).toHaveLength(0);
+  });
+
+  it('tryRegister returns cap_exceeded → sends error frame + closes ws with 1008', () => {
+    const sent: string[] = [];
+    const closedWith: Array<{ code: number; reason: string }> = [];
+
+    const ws = makeStubWs({
+      onSend: (d) => sent.push(d),
+      onClose: (code, reason) => closedWith.push({ code, reason }),
+    });
+    const sessionRegistry = makeSessionRegistry({
+      tryRegister: (_id, _ws) => ({ ok: false as const, reason: 'cap_exceeded' as const }),
+    });
+
+    const deps = {
+      config: makeConfig(),
+      sessRepo: makeSessionRepo(),
+      sessionRegistry,
+      logger: noopLogger,
+    };
+
+    handleSessionSocketOpen(ws, deps);
+    handleSessionSocketMessage(
+      ws,
+      JSON.stringify({ type: 'register', session_id: 'sess-over-cap' }),
+      deps,
+    );
+
+    // Should have sent an error frame before closing.
+    expect(sent).toHaveLength(1);
+    expect(JSON.parse(sent[0]!)).toEqual({ type: 'error', reason: 'internal_error' });
+    // Should close with 1008.
+    expect(closedWith).toHaveLength(1);
+    expect(closedWith[0]!.code).toBe(1008);
+    expect(closedWith[0]!.reason).toBe('cap_exceeded');
   });
 });
 
@@ -408,8 +455,9 @@ describe('handleSessionSocketClose', () => {
   it('close after register → disposable is invoked (unregister called)', () => {
     let disposed = false;
     const sessionRegistry = makeSessionRegistry({
-      register: (_id, _ws) => ({
-        [Symbol.dispose]: () => { disposed = true; },
+      tryRegister: (_id, _ws) => ({
+        ok: true as const,
+        disposable: { [Symbol.dispose]: () => { disposed = true; } },
       }),
     });
 
@@ -442,8 +490,9 @@ describe('handleSessionSocketClose', () => {
   it('duplicate close → idempotent, does not throw', () => {
     let disposeCount = 0;
     const sessionRegistry = makeSessionRegistry({
-      register: (_id, _ws) => ({
-        [Symbol.dispose]: () => { disposeCount++; },
+      tryRegister: (_id, _ws) => ({
+        ok: true as const,
+        disposable: { [Symbol.dispose]: () => { disposeCount++; } },
       }),
     });
 
@@ -476,8 +525,9 @@ describe('handleSessionSocketClose', () => {
     };
 
     const sessionRegistry = makeSessionRegistry({
-      register: (_id, _ws) => ({
-        [Symbol.dispose]: () => { throw new Error('dispose exploded'); },
+      tryRegister: (_id, _ws) => ({
+        ok: true as const,
+        disposable: { [Symbol.dispose]: () => { throw new Error('dispose exploded'); } },
       }),
     });
 
@@ -509,12 +559,12 @@ describe('handleSessionSocketClose', () => {
 // ── Duplicate register (rebind) test ──────────────────────────────────────────
 
 describe('duplicate register', () => {
-  it('second register on same session_id evicts via registry (register called twice)', () => {
-    const registerCalls: string[] = [];
+  it('second register on same session_id evicts via registry (tryRegister called twice)', () => {
+    const tryRegisterCalls: string[] = [];
     const sessionRegistry = makeSessionRegistry({
-      register: (id, _ws) => {
-        registerCalls.push(id);
-        return { [Symbol.dispose]: () => {} };
+      tryRegister: (id, _ws) => {
+        tryRegisterCalls.push(id);
+        return { ok: true as const, disposable: { [Symbol.dispose]: () => {} } };
       },
     });
 
@@ -541,10 +591,10 @@ describe('duplicate register', () => {
       deps,
     );
 
-    // Registry.register called twice; it handles eviction internally.
-    expect(registerCalls).toHaveLength(2);
-    expect(registerCalls[0]).toBe('sess-dup');
-    expect(registerCalls[1]).toBe('sess-dup');
+    // Registry.tryRegister called twice; it handles eviction internally.
+    expect(tryRegisterCalls).toHaveLength(2);
+    expect(tryRegisterCalls[0]).toBe('sess-dup');
+    expect(tryRegisterCalls[1]).toBe('sess-dup');
   });
 });
 
