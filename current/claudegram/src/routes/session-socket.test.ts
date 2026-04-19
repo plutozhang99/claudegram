@@ -255,7 +255,7 @@ describe('handleSessionSocketMessage — register', () => {
     handleSessionSocketOpen(ws, deps);
     handleSessionSocketMessage(
       ws,
-      JSON.stringify({ type: 'register', session_id: 'sess-abc' }),
+      JSON.stringify({ type: 'register', channels: ['plugin:fakechat@claude-plugins-official'], session_id: 'sess-abc' }),
       deps,
     );
 
@@ -284,7 +284,7 @@ describe('handleSessionSocketMessage — register', () => {
     handleSessionSocketOpen(ws, deps);
     handleSessionSocketMessage(
       ws,
-      JSON.stringify({ type: 'register', session_id: 'sess-xyz', session_name: 'My Session' }),
+      JSON.stringify({ type: 'register', channels: ['plugin:fakechat@claude-plugins-official'], session_id: 'sess-xyz', session_name: 'My Session' }),
       deps,
     );
 
@@ -366,7 +366,7 @@ describe('handleSessionSocketMessage — register', () => {
     handleSessionSocketOpen(ws, deps);
     handleSessionSocketMessage(
       ws,
-      JSON.stringify({ type: 'register', session_id: '' }),
+      JSON.stringify({ type: 'register', channels: ['plugin:fakechat@claude-plugins-official'], session_id: '' }),
       deps,
     );
 
@@ -463,13 +463,95 @@ describe('handleSessionSocketMessage — register', () => {
     handleSessionSocketOpen(ws, deps);
     handleSessionSocketMessage(
       ws,
-      JSON.stringify({ type: 'register', session_id: 'sess-fail' }),
+      JSON.stringify({ type: 'register', channels: ['plugin:fakechat@claude-plugins-official'], session_id: 'sess-fail' }),
       deps,
     );
 
     expect(sent).toHaveLength(1);
     expect(JSON.parse(sent[0]!)).toEqual({ type: 'error', reason: 'internal_error' });
     expect(tryRegisterCalls).toHaveLength(0);
+  });
+
+  it('register frame WITHOUT channels field → schema rejects (invalid_payload), no upsert, no registry call', () => {
+    const sent: string[] = [];
+    const tryRegisterCalls: string[] = [];
+    const upsertCalls: string[] = [];
+
+    const sessRepo = makeSessionRepo({
+      upsert: (s) => { upsertCalls.push(s.id); },
+    });
+    const sessionRegistry = makeSessionRegistry({
+      tryRegister: (id, _ws) => { tryRegisterCalls.push(id); return { ok: true as const, disposable: { [Symbol.dispose]: () => {} } }; },
+    });
+
+    const ws = makeStubWs({ onSend: (d) => sent.push(d) });
+    const deps = {
+      config: makeConfig(),
+      sessRepo,
+      sessionRegistry,
+      hub: makeHub(),
+      logger: noopLogger,
+    };
+
+    handleSessionSocketOpen(ws, deps);
+    // Old-client shape: no `channels` field. This is the exact payload shape
+    // that pre-gating fakechat builds send, and must now be rejected BEFORE
+    // upsert to prevent ghost sessions in the DB.
+    handleSessionSocketMessage(
+      ws,
+      JSON.stringify({ type: 'register', session_id: 'sess-no-channels' }),
+      deps,
+    );
+
+    expect(sent).toHaveLength(1);
+    expect(JSON.parse(sent[0]!)).toEqual({ type: 'error', reason: 'invalid_payload' });
+    expect(upsertCalls).toHaveLength(0);
+    expect(tryRegisterCalls).toHaveLength(0);
+  });
+
+  it('register frame with channels but missing fakechat marker → rejected + ws.close(1008), no upsert', () => {
+    const sent: string[] = [];
+    const closedWith: Array<{ code: number; reason: string }> = [];
+    const tryRegisterCalls: string[] = [];
+    const upsertCalls: string[] = [];
+    const warnCalls: string[] = [];
+
+    const sessRepo = makeSessionRepo({
+      upsert: (s) => { upsertCalls.push(s.id); },
+    });
+    const sessionRegistry = makeSessionRegistry({
+      tryRegister: (id, _ws) => { tryRegisterCalls.push(id); return { ok: true as const, disposable: { [Symbol.dispose]: () => {} } }; },
+    });
+    const logger: Logger = {
+      ...noopLogger,
+      warn: (msg) => warnCalls.push(msg),
+    };
+
+    const ws = makeStubWs({
+      onSend: (d) => sent.push(d),
+      onClose: (code, reason) => closedWith.push({ code, reason }),
+    });
+    const deps = {
+      config: makeConfig(),
+      sessRepo,
+      sessionRegistry,
+      hub: makeHub(),
+      logger,
+    };
+
+    handleSessionSocketOpen(ws, deps);
+    handleSessionSocketMessage(
+      ws,
+      JSON.stringify({ type: 'register', channels: ['plugin:something-else'], session_id: 'sess-wrong-channel' }),
+      deps,
+    );
+
+    expect(sent).toHaveLength(1);
+    expect(JSON.parse(sent[0]!)).toEqual({ type: 'error', reason: 'invalid_payload' });
+    expect(closedWith).toEqual([{ code: 1008, reason: 'no_fakechat_channel' }]);
+    expect(upsertCalls).toHaveLength(0);
+    expect(tryRegisterCalls).toHaveLength(0);
+    expect(warnCalls).toContain('session_socket_register_rejected_no_fakechat_channel');
   });
 
   it('tryRegister returns cap_exceeded → sends error frame + closes ws with 1008', () => {
@@ -495,7 +577,7 @@ describe('handleSessionSocketMessage — register', () => {
     handleSessionSocketOpen(ws, deps);
     handleSessionSocketMessage(
       ws,
-      JSON.stringify({ type: 'register', session_id: 'sess-over-cap' }),
+      JSON.stringify({ type: 'register', channels: ['plugin:fakechat@claude-plugins-official'], session_id: 'sess-over-cap' }),
       deps,
     );
 
@@ -533,7 +615,7 @@ describe('handleSessionSocketClose', () => {
     handleSessionSocketOpen(ws, deps);
     handleSessionSocketMessage(
       ws,
-      JSON.stringify({ type: 'register', session_id: 'sess-close-test' }),
+      JSON.stringify({ type: 'register', channels: ['plugin:fakechat@claude-plugins-official'], session_id: 'sess-close-test' }),
       deps,
     );
 
@@ -569,7 +651,7 @@ describe('handleSessionSocketClose', () => {
     handleSessionSocketOpen(ws, deps);
     handleSessionSocketMessage(
       ws,
-      JSON.stringify({ type: 'register', session_id: 'sess-dup-close' }),
+      JSON.stringify({ type: 'register', channels: ['plugin:fakechat@claude-plugins-official'], session_id: 'sess-dup-close' }),
       deps,
     );
 
@@ -605,7 +687,7 @@ describe('handleSessionSocketClose', () => {
     handleSessionSocketOpen(ws, deps);
     handleSessionSocketMessage(
       ws,
-      JSON.stringify({ type: 'register', session_id: 'sess-dispose-throws' }),
+      JSON.stringify({ type: 'register', channels: ['plugin:fakechat@claude-plugins-official'], session_id: 'sess-dispose-throws' }),
       deps,
     );
 
@@ -644,14 +726,14 @@ describe('duplicate register', () => {
     handleSessionSocketOpen(ws1, deps);
     handleSessionSocketMessage(
       ws1,
-      JSON.stringify({ type: 'register', session_id: 'sess-dup' }),
+      JSON.stringify({ type: 'register', channels: ['plugin:fakechat@claude-plugins-official'], session_id: 'sess-dup' }),
       deps,
     );
 
     handleSessionSocketOpen(ws2, deps);
     handleSessionSocketMessage(
       ws2,
-      JSON.stringify({ type: 'register', session_id: 'sess-dup' }),
+      JSON.stringify({ type: 'register', channels: ['plugin:fakechat@claude-plugins-official'], session_id: 'sess-dup' }),
       deps,
     );
 
@@ -703,7 +785,7 @@ describe('FIX 2/3 — session_socket broadcasts connected:true on register', () 
     handleSessionSocketOpen(ws, deps);
     handleSessionSocketMessage(
       ws,
-      JSON.stringify({ type: 'register', session_id: 'sess-bc' }),
+      JSON.stringify({ type: 'register', channels: ['plugin:fakechat@claude-plugins-official'], session_id: 'sess-bc' }),
       deps,
     );
 
@@ -744,7 +826,7 @@ describe('FIX 4 — session_socket broadcasts connected:false on close', () => {
     handleSessionSocketOpen(ws, deps);
     handleSessionSocketMessage(
       ws,
-      JSON.stringify({ type: 'register', session_id: 'sess-close-bc' }),
+      JSON.stringify({ type: 'register', channels: ['plugin:fakechat@claude-plugins-official'], session_id: 'sess-close-bc' }),
       deps,
     );
 

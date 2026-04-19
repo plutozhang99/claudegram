@@ -229,6 +229,7 @@ describe('2.6a — Happy-path relay: PWA reply forwarded to fake-fakechat', () =
     try {
       sessionWs.send(JSON.stringify({
         type: 'register',
+        channels: ['plugin:fakechat@claude-plugins-official'],
         session_id: SESSION_ID,
         session_name: 'E2E Session',
       }));
@@ -352,6 +353,7 @@ describe('2.6c — Echo dedup: no double-broadcast when fakechat correctly skips
     try {
       sessionWs.send(JSON.stringify({
         type: 'register',
+        channels: ['plugin:fakechat@claude-plugins-official'],
         session_id: SESSION_ID,
         session_name: 'Echo Dedup Session',
       }));

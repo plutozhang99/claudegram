@@ -207,10 +207,12 @@ describe('start() and register frame', () => {
     mock.fireOpen()
 
     expect(mock.sentFrames).toHaveLength(1)
-    const frame = JSON.parse(mock.sentFrames[0]) as { type: string; session_id: string; session_name?: string }
+    const frame = JSON.parse(mock.sentFrames[0]) as { type: string; session_id: string; session_name?: string; channels?: string[] }
     expect(frame.type).toBe('register')
     expect(frame.session_id).toBe('test-session-id')
     expect(frame.session_name).toBe('my-session')
+    // Channel marker gates claudegram-side acceptance — must always be present.
+    expect(frame.channels).toEqual(['plugin:fakechat@claude-plugins-official'])
     await client.stop()
   })
 

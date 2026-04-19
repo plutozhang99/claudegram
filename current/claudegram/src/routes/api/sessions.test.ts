@@ -1,5 +1,5 @@
 import { describe, it, expect, mock } from 'bun:test';
-import type { SessionRepo, MessageRepo } from '../../repo/types.js';
+import type { SessionRepo, MessageRepo, Session } from '../../repo/types.js';
 import type { SessionRegistry } from '../../ws/session-registry.js';
 import type { Hub, BroadcastPayload } from '../../ws/hub.js';
 import type { Logger } from '../../logger.js';
@@ -33,6 +33,21 @@ function makeRegistry(connected: Record<string, boolean> = {}): SessionRegistry 
   };
 }
 
+const noopMsgRepo = {
+  insert: () => {},
+  findBySession: () => [],
+  findBySessionPage: () => ({ messages: [], has_more: false }),
+  findById: () => null,
+  deleteBySession: () => {},
+};
+const noopHub = {
+  tryAdd: () => ({ ok: true as const }),
+  add: () => {},
+  remove: () => {},
+  broadcast: () => {},
+  get size() { return 0; },
+};
+
 const emptyRepo = {
   sessRepo: {
     upsert: () => {},
@@ -44,6 +59,8 @@ const emptyRepo = {
   } satisfies SessionRepo,
   sessionRegistry: makeRegistry(),
   logger: noopLogger,
+  msgRepo: noopMsgRepo as unknown as import('../../repo/types.js').MessageRepo,
+  hub: noopHub as unknown as import('../../ws/hub.js').Hub,
 };
 
 const twoItemSessRepo: SessionRepo = {
@@ -89,6 +106,8 @@ describe('handleApiSessions', () => {
       sessRepo: twoItemSessRepo,
       sessionRegistry: makeRegistry(),
       logger: noopLogger,
+      msgRepo: noopMsgRepo as unknown as import('../../repo/types.js').MessageRepo,
+      hub: noopHub as unknown as import('../../ws/hub.js').Hub,
     };
     const res = handleApiSessions(makeReq('GET'), twoItemRepo);
     const r = res instanceof Promise ? await res : res;
@@ -106,6 +125,8 @@ describe('handleApiSessions', () => {
       sessRepo: twoItemSessRepo,
       sessionRegistry: makeRegistry(), // both offline
       logger: noopLogger,
+      msgRepo: noopMsgRepo as unknown as import('../../repo/types.js').MessageRepo,
+      hub: noopHub as unknown as import('../../ws/hub.js').Hub,
     };
     const res = handleApiSessions(makeReq('GET'), twoItemRepo);
     const r = res instanceof Promise ? await res : res;
@@ -121,6 +142,8 @@ describe('handleApiSessions', () => {
       sessRepo: twoItemSessRepo,
       sessionRegistry: makeRegistry({ 'sess-1': true }), // sess-1 online
       logger: noopLogger,
+      msgRepo: noopMsgRepo as unknown as import('../../repo/types.js').MessageRepo,
+      hub: noopHub as unknown as import('../../ws/hub.js').Hub,
     };
     const res = handleApiSessions(makeReq('GET'), twoItemRepo);
     const r = res instanceof Promise ? await res : res;
@@ -157,6 +180,8 @@ describe('handleApiSessions', () => {
       } satisfies SessionRepo,
       sessionRegistry: makeRegistry(),
       logger: errorLogger,
+      msgRepo: noopMsgRepo as unknown as import('../../repo/types.js').MessageRepo,
+      hub: noopHub as unknown as import('../../ws/hub.js').Hub,
     };
 
     const res = handleApiSessions(makeReq('GET'), throwingRepo);
@@ -281,6 +306,79 @@ describe('handleApiSessionDelete', () => {
 
     expect(closeBy).toHaveBeenCalledTimes(1);
     expect(closeBy.mock.calls[0]).toEqual(['sess-del', 1000, 'session_deleted']);
+  });
+});
+
+describe('handleApiSessions bulk DELETE (?offline=true)', () => {
+  const threeItemRepoRows: Session[] = [
+    { id: 'online-1', name: 'Online A', first_seen_at: 1, last_seen_at: 2, status: 'active', last_read_at: 0 },
+    { id: 'offline-1', name: 'Offline A', first_seen_at: 3, last_seen_at: 4, status: 'active', last_read_at: 0 },
+    { id: 'offline-2', name: 'Offline B', first_seen_at: 5, last_seen_at: 6, status: 'active', last_read_at: 0 },
+  ];
+
+  function makeBulkDeps() {
+    const deletedRows: string[] = [];
+    const deletedMessages: string[] = [];
+    const broadcasts: BroadcastPayload[] = [];
+    const deps = {
+      sessRepo: {
+        upsert: () => {},
+        findById: () => null,
+        findAll: () => threeItemRepoRows,
+        updateLastReadAt: () => {},
+        delete: (id: string) => { deletedRows.push(id); return true; },
+        rename: () => false,
+      } as unknown as SessionRepo,
+      sessionRegistry: makeRegistry({ 'online-1': true }),
+      msgRepo: {
+        insert: () => {},
+        findBySession: () => [],
+        findBySessionPage: () => ({ messages: [], has_more: false }),
+        findById: () => null,
+        deleteBySession: (id: string) => { deletedMessages.push(id); },
+      } as unknown as import('../../repo/types.js').MessageRepo,
+      hub: {
+        tryAdd: () => ({ ok: true as const }),
+        add: () => {},
+        remove: () => {},
+        broadcast: (p: BroadcastPayload) => { broadcasts.push(p); },
+        get size() { return 0; },
+      } as unknown as import('../../ws/hub.js').Hub,
+      logger: noopLogger,
+    };
+    return { deps, deletedRows, deletedMessages, broadcasts };
+  }
+
+  it('DELETE /api/sessions?offline=true → deletes only offline sessions; online ones stay', async () => {
+    const { deps, deletedRows } = makeBulkDeps();
+    const req = new Request('http://localhost/api/sessions?offline=true', { method: 'DELETE' });
+    const res = handleApiSessions(req, deps);
+    const r = res instanceof Promise ? await res : res;
+    expect(r.status).toBe(200);
+    const body = await json(r);
+    expect(body.ok).toBe(true);
+    expect((body.deleted as string[]).sort()).toEqual(['offline-1', 'offline-2']);
+    expect(deletedRows.sort()).toEqual(['offline-1', 'offline-2']);
+  });
+
+  it('DELETE /api/sessions?offline=true → broadcasts session_deleted per removed row', async () => {
+    const { deps, broadcasts } = makeBulkDeps();
+    const req = new Request('http://localhost/api/sessions?offline=true', { method: 'DELETE' });
+    const res = handleApiSessions(req, deps);
+    await (res instanceof Promise ? res : Promise.resolve(res));
+
+    const deletedEvents = broadcasts.filter((b) => b.type === 'session_deleted');
+    expect(deletedEvents).toHaveLength(2);
+    const ids = deletedEvents.map((e) => (e as { type: 'session_deleted'; session_id: string }).session_id).sort();
+    expect(ids).toEqual(['offline-1', 'offline-2']);
+  });
+
+  it('DELETE /api/sessions without ?offline=true → 400 (unscoped bulk delete refused)', async () => {
+    const { deps } = makeBulkDeps();
+    const req = new Request('http://localhost/api/sessions', { method: 'DELETE' });
+    const res = handleApiSessions(req, deps);
+    const r = res instanceof Promise ? await res : res;
+    expect(r.status).toBe(400);
   });
 });
 

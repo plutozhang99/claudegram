@@ -172,14 +172,43 @@ aside {
   display: flex; flex-direction: column; overflow: hidden;
 }
 
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 1rem 1.25rem 0.5rem;
+}
+
 .sidebar-heading {
   font-size: 0.7rem;
   font-weight: 400;
   text-transform: uppercase;
   letter-spacing: 0.12em;
   color: var(--ink-dim);
-  padding: 1rem 1.25rem 0.5rem;
+  padding: 0;
 }
+
+.sidebar-action {
+  background: transparent;
+  border: 1px solid var(--border-warm);
+  border-radius: var(--radius-pill);
+  padding: 0.25em 0.7em;
+  color: var(--ink-dim);
+  font: inherit;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  white-space: nowrap;
+}
+.sidebar-action:hover {
+  background: var(--surface2);
+  color: var(--ink);
+  border-color: var(--ink);
+}
+.sidebar-action:active { transform: translateY(1px); }
 
 #session-list {
   flex: 1; overflow-y: auto; list-style: none;

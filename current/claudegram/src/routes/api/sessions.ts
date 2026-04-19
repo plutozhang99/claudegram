@@ -17,13 +17,69 @@ export interface ApiSessionsDeps extends Pick<RouterCtx, 'sessRepo' | 'logger'> 
 
 export function handleApiSessions(
   req: Request,
-  deps: ApiSessionsDeps,
+  deps: ApiSessionsDeps & Pick<RouterCtx, 'msgRepo' | 'hub'>,
 ): Promise<Response> | Response {
   if (req.method === 'GET') {
     return handleGet(req, deps);
   }
+  if (req.method === 'DELETE') {
+    return handleBulkDelete(req, deps);
+  }
 
   return jsonResponse(405, METHOD_NOT_ALLOWED);
+}
+
+/**
+ * Bulk-delete sessions. Currently supports `?offline=true` which removes every
+ * session that is not currently registered in the in-memory sessionRegistry.
+ * Lets users clean up historical ghost sessions (e.g. from older fakechat
+ * builds that didn't gate on channels) in one call instead of clicking × per row.
+ */
+function handleBulkDelete(
+  req: Request,
+  deps: ApiSessionsDeps & Pick<RouterCtx, 'msgRepo' | 'hub'>,
+): Response {
+  const url = new URL(req.url);
+  const offlineOnly = url.searchParams.get('offline') === 'true';
+  if (!offlineOnly) {
+    return jsonResponse(400, {
+      ok: false,
+      error: 'DELETE /api/sessions requires ?offline=true (scoped bulk delete)',
+    } satisfies ApiError);
+  }
+
+  try {
+    const rows = deps.sessRepo.findAll();
+    const deleted: string[] = [];
+    for (const s of rows) {
+      if (deps.sessionRegistry.has(s.id)) continue; // skip online sessions
+      try {
+        deps.msgRepo.deleteBySession(s.id);
+        const ok = deps.sessRepo.delete(s.id);
+        if (!ok) continue; // racy delete — already gone
+      } catch (err) {
+        deps.logger.warn('sessions_bulk_delete_row_failed', {
+          session_id: s.id,
+          err: err instanceof Error ? err.message : String(err),
+        });
+        continue;
+      }
+      deleted.push(s.id);
+      try {
+        deps.hub.broadcast({ type: 'session_deleted', session_id: s.id });
+      } catch (broadcastErr) {
+        deps.logger.warn('sessions_bulk_delete_broadcast_failed', {
+          session_id: s.id,
+          err: broadcastErr instanceof Error ? broadcastErr.message : String(broadcastErr),
+        });
+      }
+    }
+    deps.logger.info('sessions_bulk_delete_offline', { count: deleted.length });
+    return jsonResponse(200, { ok: true, deleted });
+  } catch (err) {
+    deps.logger.error('sessions_bulk_delete_failed', { err: String(err) });
+    return jsonResponse(500, { ok: false, error: 'internal error' } satisfies ApiError);
+  }
 }
 
 function handleGet(

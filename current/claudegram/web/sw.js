@@ -1,7 +1,7 @@
 // Bump VERSION whenever any of the SHELL files change so the SW activates and
 // old caches get purged on first reload. Failing to bump makes users see stale
 // HTML/CSS/JS — the exact symptom behind "my UI changes didn't appear".
-const VERSION = 'v4-mobile-fix';
+const VERSION = 'v5-channel-gating';
 const SHELL = [
   '/',
   '/web/style.css',

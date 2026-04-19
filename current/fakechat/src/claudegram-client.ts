@@ -202,9 +202,20 @@ export class ClaudegramClient {
       this._isConnected = true
       this.reconnectAttempt = 0
       this.log.info('claudegram_ws_connected', { url: wsUrl })
-      const frame: { type: 'register'; session_id: string; session_name?: string; cwd?: string } = {
+      // `channels` identifies this register as originating from the fakechat
+      // plugin. Claudegram rejects register frames without this marker,
+      // filtering out any non-fakechat clients (and pre-channels-field clients
+      // that happen to still be running from older Claude Code sessions).
+      const frame: {
+        type: 'register'
+        session_id: string
+        channels: string[]
+        session_name?: string
+        cwd?: string
+      } = {
         type: 'register',
         session_id: this.cfg.sessionId,
+        channels: ['plugin:fakechat@claude-plugins-official'],
         ...(this.cfg.sessionName !== undefined ? { session_name: this.cfg.sessionName } : {}),
         ...(this.cfg.cwd !== undefined ? { cwd: this.cfg.cwd } : {}),
       }

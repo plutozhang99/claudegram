@@ -207,6 +207,30 @@ async function onRenameSession(id) {
 // Sidebar toggle
 document.getElementById('sidebar-toggle')?.addEventListener('click', toggleSidebar);
 
+// Clear-offline: bulk-delete all sessions that aren't currently connected.
+// Lets users tidy up historical ghost rows left behind by older fakechat
+// builds without clicking × on every row.
+document.getElementById('clear-offline-btn')?.addEventListener('click', async () => {
+  const offline = Array.from(store.state.sessions.values()).filter((s) => s.connected !== true);
+  if (offline.length === 0) {
+    alert('No offline sessions to clear.');
+    return;
+  }
+  if (!confirm(`Delete ${offline.length} offline session${offline.length === 1 ? '' : 's'}? This cannot be undone.`)) {
+    return;
+  }
+  try {
+    const res = await fetch('/api/sessions?offline=true', { method: 'DELETE' });
+    if (!res.ok) { console.error('clear-offline: non-ok', res.status); return; }
+    const data = await res.json();
+    if (data && Array.isArray(data.deleted)) {
+      for (const id of data.deleted) store.applySessionDeleted(id);
+    }
+  } catch (e) {
+    console.error('clear-offline error', e);
+  }
+});
+
 /**
  * Select a session: mark active and hydrate messages if not yet loaded.
  * @param {string} id

@@ -28,11 +28,24 @@ export interface SessionSocketData {
 
 // ── Inbound message schema ────────────────────────────────────────────────────
 
+/**
+ * The fakechat plugin channel that must be present in the register frame for a
+ * session to be admitted. Older fakechat builds (pre-channels field) simply
+ * don't send `channels` at all and are rejected at schema level. Claude Code
+ * sessions running fakechat without `--channels plugin:fakechat@claude-plugins-official`
+ * never reach first interaction in the current client (lazy-start), so they
+ * also never try to register. Both cases stop ghost sessions from appearing.
+ */
+const FAKECHAT_CHANNEL = 'plugin:fakechat@claude-plugins-official';
+
 const registerFrameSchema = z.object({
   type: z.literal('register'),
   session_id: z.string().min(1),
   session_name: z.string().min(1).optional(),
   cwd: z.string().min(1).optional(),
+  // channels is required in new clients; old clients omit it → zod fails the
+  // discriminated-union parse → handled as invalid_payload + close.
+  channels: z.array(z.string().min(1)).min(1),
 });
 
 const pongFrameSchema = z.object({ type: z.literal('pong') });
@@ -206,7 +219,22 @@ export function handleSessionSocketMessage(
   }
 
   const msg: RegisterFrame = validation.data;
-  const { session_id, session_name, cwd } = msg;
+  const { session_id, session_name, cwd, channels } = msg;
+
+  // Gate: the register frame MUST advertise the fakechat channel. This rejects
+  // any client that is not explicitly acting as a fakechat plugin — including
+  // old pre-channels-field clients (whose frame already failed schema above,
+  // so this second check only rejects well-formed-but-non-fakechat claimants).
+  if (!channels.includes(FAKECHAT_CHANNEL)) {
+    logger.warn('session_socket_register_rejected_no_fakechat_channel', {
+      session_id,
+      channels,
+    });
+    sendErrorFrame(ws, 'invalid_payload', capBytes, logger, 'no_fakechat_channel', session_id);
+    ws.close(1008, 'no_fakechat_channel');
+    return;
+  }
+
   const now = Date.now();
 
   // Upsert the session in the database.
