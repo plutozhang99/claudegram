@@ -14,9 +14,14 @@ function formatTime(ts) {
 }
 
 /**
- * @param {{ store: ReturnType<import('./store.js').createStore>, onSelectSession: (id: string) => void }} opts
+ * @param {{
+ *   store: ReturnType<import('./store.js').createStore>,
+ *   onSelectSession: (id: string) => void,
+ *   onSendReply: (text: string) => boolean,
+ *   onDeleteSession: (id: string) => Promise<boolean>,
+ * }} opts
  */
-export function createRenderer({ store, onSelectSession }) {
+export function createRenderer({ store, onSelectSession, onSendReply, onDeleteSession }) {
   const sessionListEl = document.getElementById('session-list');
   const messagesEl = document.getElementById('messages');
   const composeTextEl = document.getElementById('compose-text');
@@ -28,17 +33,28 @@ export function createRenderer({ store, onSelectSession }) {
   // Wire compose textarea to enable/disable send button
   composeTextEl?.addEventListener('input', updateSendBtn);
 
-  // P1 stub: form submit is a no-op — replies arrive in P2
+  // Send reply on form submit (Enter or Send button click)
   composeFormEl?.addEventListener('submit', (e) => {
     e.preventDefault();
-    // TODO(P2): send reply via POST /api/messages
+    if (!composeTextEl || !sendBtnEl) return;
+    const text = composeTextEl.value.trim();
+    if (text.length === 0 || store.state.activeId === null) return;
+    const ok = onSendReply(text);
+    if (ok) {
+      composeTextEl.value = '';
+      updateSendBtn();
+    }
+    // If !ok the WS is not open — leave the textarea so the user can retry.
   });
 
   function updateSendBtn() {
     if (!sendBtnEl || !composeTextEl) return;
     const hasText = composeTextEl.value.trim().length > 0;
     const hasSession = store.state.activeId !== null;
-    sendBtnEl.disabled = !(hasText && hasSession);
+    // FIX 2/3/4: disable send when the active session has no live fakechat connection.
+    const activeSession = store.state.activeId !== null ? store.state.sessions.get(store.state.activeId) : null;
+    const isConnected = activeSession?.connected !== false; // undefined = legacy (assume connected)
+    sendBtnEl.disabled = !(hasText && hasSession && isConnected);
   }
 
   function renderSessions() {
@@ -82,7 +98,22 @@ export function createRenderer({ store, onSelectSession }) {
 
       const unread = session.unread_count ?? 0;
       const badge = unread > 0 ? ` <span class="unread-badge" aria-label="${unread} unread">${unread}</span>` : '';
-      li.innerHTML = `<span class="session-name">${escapeHtml(session.name ?? id)}</span>${badge}`;
+      // FIX 2/3/4: show offline indicator when connected === false.
+      const offlineTag = session.connected === false
+        ? ' <span class="session-offline" aria-label="offline">(offline)</span>'
+        : '';
+      // FIX 7: delete button per session.
+      const deleteBtn = `<button class="session-delete" aria-label="Delete session" title="Delete session">×</button>`;
+      li.innerHTML = `<span class="session-name">${escapeHtml(session.name ?? id)}</span>${offlineTag}${badge}${deleteBtn}`;
+
+      // Wire delete button (each render replaces innerHTML so re-attach is required).
+      const delBtn = li.querySelector('.session-delete');
+      if (delBtn) {
+        delBtn.addEventListener('click', (e) => {
+          e.stopPropagation(); // don't trigger session selection
+          onDeleteSession(id);
+        });
+      }
     }
 
     // Remove stale entries
@@ -110,12 +141,21 @@ export function createRenderer({ store, onSelectSession }) {
       const li = document.createElement('li');
       li.dataset.from = msg.direction;
       li.dataset.msgId = String(msg.id);
+      if (msg.pending) li.dataset.state = 'pending';
+      else if (msg.failed) li.dataset.state = 'failed';
+      const who = msg.direction === 'user' ? 'you' : 'them';
+      const statusTag = msg.pending
+        ? ' <span class="msg-status pending">sending…</span>'
+        : msg.failed
+          ? ` <span class="msg-status failed">delivery failed: ${escapeHtml(String(msg.failed_reason ?? 'unknown'))}</span>`
+          : '';
       li.innerHTML =
         `<span class="msg-meta">` +
         `<span class="ts">${escapeHtml(formatTime(msg.ts ?? msg.ingested_at))}</span>` +
-        `<span class="who">${escapeHtml(msg.direction === 'inbound' ? 'them' : 'you')}</span>` +
+        `<span class="who">${escapeHtml(who)}</span>` +
         `</span>` +
-        `<span class="msg-body">${escapeHtml(String(msg.content ?? ''))}</span>`;
+        `<span class="msg-body">${escapeHtml(String(msg.content ?? msg.text ?? ''))}</span>` +
+        statusTag;
       messagesEl.appendChild(li);
     }
 

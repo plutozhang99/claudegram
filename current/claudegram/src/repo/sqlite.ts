@@ -1,6 +1,9 @@
 import type { Database } from '../db/client.js';
 import type { Message, Session, SessionListItem, MessageInsert, SessionUpsert, MessageRepo, SessionRepo } from './types.js';
 
+/** The shape returned by the DB for findAll — no `connected` field (that's added by the API layer). */
+type SessionRow = Omit<SessionListItem, 'connected'>;
+
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 500;
 
@@ -15,6 +18,7 @@ export class SqliteMessageRepo implements MessageRepo {
   private readonly stmtPageWithBefore: ReturnType<Database['prepare']>;
   private readonly stmtPageWithoutBefore: ReturnType<Database['prepare']>;
   private readonly stmtFindById: ReturnType<Database['prepare']>;
+  private readonly stmtDeleteBySession: ReturnType<Database['prepare']>;
 
   constructor(private readonly db: Database) {
     this.stmtInsertWithIngested = db.prepare(
@@ -72,6 +76,10 @@ export class SqliteMessageRepo implements MessageRepo {
       `SELECT session_id, id, direction, ts, ingested_at, content
        FROM messages
        WHERE session_id=? AND id=?`
+    );
+
+    this.stmtDeleteBySession = db.prepare(
+      `DELETE FROM messages WHERE session_id=?`
     );
   }
 
@@ -137,6 +145,10 @@ export class SqliteMessageRepo implements MessageRepo {
   findById(session_id: string, id: string): Readonly<Message> | null {
     return (this.stmtFindById.get(session_id, id) as Message | null) ?? null;
   }
+
+  deleteBySession(session_id: string): void {
+    this.stmtDeleteBySession.run(session_id);
+  }
 }
 
 // ─────────────────────────────── SessionRepo ───────────────────────────────
@@ -146,6 +158,7 @@ export class SqliteSessionRepo implements SessionRepo {
   private readonly stmtFindById: ReturnType<Database['prepare']>;
   private readonly stmtFindAll: ReturnType<Database['prepare']>;
   private readonly stmtUpdateLastReadAt: ReturnType<Database['prepare']>;
+  private readonly stmtDelete: ReturnType<Database['prepare']>;
 
   constructor(private readonly db: Database) {
     this.stmtUpsert = db.prepare(
@@ -174,6 +187,8 @@ export class SqliteSessionRepo implements SessionRepo {
     this.stmtUpdateLastReadAt = db.prepare(
       `UPDATE sessions SET last_read_at = MAX(COALESCE(last_read_at, 0), ?) WHERE id = ?`
     );
+
+    this.stmtDelete = db.prepare(`DELETE FROM sessions WHERE id=?`);
   }
 
   upsert(s: SessionUpsert): void {
@@ -184,11 +199,16 @@ export class SqliteSessionRepo implements SessionRepo {
     return (this.stmtFindById.get(id) as Session | null) ?? null;
   }
 
-  findAll(): ReadonlyArray<SessionListItem> {
-    return this.stmtFindAll.all() as SessionListItem[];
+  findAll(): ReadonlyArray<SessionRow> {
+    return this.stmtFindAll.all() as SessionRow[];
   }
 
   updateLastReadAt(session_id: string, ts: number): void {
     this.stmtUpdateLastReadAt.run(ts, session_id);
+  }
+
+  delete(id: string): boolean {
+    const result = this.stmtDelete.run(id);
+    return (result as { changes: number }).changes > 0;
   }
 }

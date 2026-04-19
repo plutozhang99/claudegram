@@ -488,4 +488,44 @@ describe('SqliteSessionRepo.updateLastReadAt', () => {
     const sess = sessRepo.findById('nonexistent-session');
     expect(sess).toBeNull();
   });
+
+  it('delete existing session → returns true and row is gone', () => {
+    sessRepo.upsert({ id: 'del-sess', name: 'Del', now: 100 });
+    expect(sessRepo.findById('del-sess')).not.toBeNull();
+    const deleted = sessRepo.delete('del-sess');
+    expect(deleted).toBe(true);
+    expect(sessRepo.findById('del-sess')).toBeNull();
+  });
+
+  it('delete non-existent session → returns false', () => {
+    const deleted = sessRepo.delete('no-such-session');
+    expect(deleted).toBe(false);
+  });
+});
+
+describe('SqliteMessageRepo.deleteBySession()', () => {
+  it('deleteBySession removes all messages for a session', () => {
+    sessRepo.upsert({ id: 'sess-del-msg', name: 'Test', now: 100 });
+    msgRepo.insert({ session_id: 'sess-del-msg', id: 'm1', direction: 'user', ts: 100, content: 'a' });
+    msgRepo.insert({ session_id: 'sess-del-msg', id: 'm2', direction: 'assistant', ts: 200, content: 'b' });
+    expect(msgRepo.findBySession('sess-del-msg')).toHaveLength(2);
+
+    msgRepo.deleteBySession('sess-del-msg');
+    expect(msgRepo.findBySession('sess-del-msg')).toHaveLength(0);
+  });
+
+  it('deleteBySession is no-op for unknown session — does not throw', () => {
+    expect(() => msgRepo.deleteBySession('unknown-sess')).not.toThrow();
+  });
+
+  it('deleteBySession does not affect other sessions', () => {
+    sessRepo.upsert({ id: 'sess-a', name: 'A', now: 100 });
+    sessRepo.upsert({ id: 'sess-b', name: 'B', now: 100 });
+    msgRepo.insert({ session_id: 'sess-a', id: 'ma1', direction: 'user', ts: 100, content: 'a' });
+    msgRepo.insert({ session_id: 'sess-b', id: 'mb1', direction: 'user', ts: 100, content: 'b' });
+
+    msgRepo.deleteBySession('sess-a');
+    expect(msgRepo.findBySession('sess-a')).toHaveLength(0);
+    expect(msgRepo.findBySession('sess-b')).toHaveLength(1);
+  });
 });

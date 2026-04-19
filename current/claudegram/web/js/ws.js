@@ -69,6 +69,10 @@ export function createWsClient(url) {
         emit('message', { session_id: data.session_id, message: data.message });
       } else if (data && data.type === 'session_update') {
         emit('session_update', { session: data.session });
+      } else if (data && data.type === 'session_deleted') {
+        emit('session_deleted', { session_id: data.session_id });
+      } else if (data && data.type === 'error') {
+        emit('error', data);
       }
     });
   }
@@ -96,7 +100,24 @@ export function createWsClient(url) {
     setPill('closed', 'closed');
   }
 
+  /**
+   * Send a JSON payload to the server. Returns true on send, false if the
+   * socket is not open (caller should surface this to the user).
+   * @param {object} payload
+   * @returns {boolean}
+   */
+  function send(payload) {
+    if (!socket || socket.readyState !== WebSocket.OPEN) return false;
+    try {
+      socket.send(JSON.stringify(payload));
+      return true;
+    } catch (e) {
+      console.error('ws: send failed', e);
+      return false;
+    }
+  }
+
   connect();
 
-  return { on, off, close };
+  return { on, off, close, send };
 }

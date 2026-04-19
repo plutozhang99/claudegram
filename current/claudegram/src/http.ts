@@ -3,9 +3,10 @@ import type { Logger } from './logger.js';
 import type { MessageRepo, SessionRepo } from './repo/types.js';
 import type { Database } from './db/client.js';
 import type { Hub } from './ws/hub.js';
+import type { SessionRegistry } from './ws/session-registry.js';
 import { handleHealth } from './routes/health.js';
 import { handleIngest } from './routes/ingest.js';
-import { handleApiSessions } from './routes/api/sessions.js';
+import { handleApiSessions, handleApiSessionDelete } from './routes/api/sessions.js';
 import { handleApiMessages } from './routes/api/messages.js';
 import { handleApiMe } from './routes/api/me.js';
 import { handleRoot, handleWebAsset, serveStaticFile } from './routes/static.js';
@@ -18,6 +19,7 @@ export interface RouterCtx {
   readonly hub: Hub;
   readonly config: Config;
   readonly webRoot: string;
+  readonly sessionRegistry: SessionRegistry;
 }
 
 export function jsonResponse(status: number, body: unknown): Response {
@@ -56,6 +58,13 @@ export async function dispatch(req: Request, ctx: RouterCtx): Promise<Response> 
   // API routes
   if (path === '/api/sessions') {
     return handleApiSessions(req, ctx);
+  }
+
+  // DELETE /api/sessions/:id
+  const sessionDeleteMatch = path.match(/^\/api\/sessions\/([^/]+)$/);
+  if (sessionDeleteMatch !== null) {
+    const id = decodeURIComponent(sessionDeleteMatch[1]!);
+    return handleApiSessionDelete(req, id, ctx);
   }
 
   if (path === '/api/messages') {

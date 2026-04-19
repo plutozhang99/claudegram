@@ -108,6 +108,28 @@ main { display: flex; flex-direction: column; overflow: hidden; background: var(
 .messages li[data-from="assistant"] .msg-body { background: var(--bot-bg); border: 1px solid var(--border); }
 .messages li[data-from="user"] .msg-body      { background: var(--user-bg); color: #eff6ff; }
 
+/* Pending / failed optimistic echo states */
+.messages li[data-state="pending"] .msg-body { opacity: 0.6; }
+.messages li[data-state="failed"]  .msg-body { border: 1px solid #dc2626; }
+.msg-status {
+  display: inline-block; margin-top: 0.2rem; font-size: 0.72rem;
+  font-family: monospace; padding: 0.05em 0.4em; border-radius: 4px;
+}
+.msg-status.pending { color: var(--text-dim); }
+.msg-status.failed  { color: #fca5a5; background: #450a0a; }
+
+/* Session list: offline indicator and delete button */
+.session-offline {
+  font-size: 0.7rem; color: var(--text-dim); font-style: italic; margin-left: 0.3ch;
+}
+.session-delete {
+  float: right; background: none; border: none; color: var(--text-dim);
+  cursor: pointer; font-size: 0.9rem; padding: 0 0.3em; line-height: 1;
+  border-radius: var(--radius); opacity: 0;
+}
+#session-list li:hover .session-delete { opacity: 0.6; }
+.session-delete:hover { opacity: 1 !important; color: #fca5a5; }
+
 /* Attachment chip */
 a.chip {
   display: inline-flex; align-items: center; gap: 0.3ch; margin-top: 0.3rem;

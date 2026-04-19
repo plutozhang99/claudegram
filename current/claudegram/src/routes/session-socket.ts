@@ -7,6 +7,7 @@ import type { Logger } from '../logger.js';
 import type { Config } from '../config.js';
 import type { SessionRepo } from '../repo/types.js';
 import type { SessionRegistry } from '../ws/session-registry.js';
+import type { Hub } from '../ws/hub.js';
 import {
   sendWithBackpressure as _sendWithBackpressure,
   sendErrorFrame as _sendErrorFrame,
@@ -83,6 +84,7 @@ export interface SessionSocketDeps {
   readonly config: Config;
   readonly sessRepo: SessionRepo;
   readonly sessionRegistry: SessionRegistry;
+  readonly hub: Hub;
   readonly logger: Logger;
 }
 
@@ -118,7 +120,7 @@ export function handleSessionSocketMessage(
   rawMessage: string | Buffer,
   deps: SessionSocketDeps,
 ): void {
-  const { config, sessRepo, sessionRegistry, logger } = deps;
+  const { config, sessRepo, sessionRegistry, hub, logger } = deps;
   const capBytes = config.wsOutboundBufferCapBytes;
 
   let parsed: unknown;
@@ -189,13 +191,26 @@ export function handleSessionSocketMessage(
   badFrameCount.set(ws, 0);
 
   logger.info('session_socket_registered', { session_id });
+
+  // FIX 2/3: Broadcast connected:true so all PWAs see the session come online.
+  try {
+    const session = sessRepo.findById(session_id);
+    if (session !== null) {
+      hub.broadcast({ type: 'session_update', session: { ...session, connected: true } });
+    }
+  } catch (broadcastErr) {
+    logger.warn('session_socket_register_broadcast_failed', {
+      session_id,
+      err: broadcastErr instanceof Error ? broadcastErr.message : String(broadcastErr),
+    });
+  }
 }
 
 export function handleSessionSocketClose(
   ws: ServerWebSocket<unknown>,
-  deps: Pick<SessionSocketDeps, 'sessionRegistry' | 'logger'>,
+  deps: Pick<SessionSocketDeps, 'sessionRegistry' | 'hub' | 'sessRepo' | 'logger'>,
 ): void {
-  const { logger } = deps;
+  const { hub, sessRepo, logger } = deps;
   const state = wsState.get(ws);
 
   try {
@@ -210,6 +225,19 @@ export function handleSessionSocketClose(
         });
       }
       logger.info('session_socket_closed', { session_id: state.session_id });
+
+      // FIX 4: Broadcast connected:false so all PWAs see the session go offline.
+      try {
+        const session = sessRepo.findById(state.session_id);
+        if (session !== null) {
+          hub.broadcast({ type: 'session_update', session: { ...session, connected: false } });
+        }
+      } catch (broadcastErr) {
+        logger.warn('session_socket_close_broadcast_failed', {
+          session_id: state.session_id,
+          err: broadcastErr instanceof Error ? broadcastErr.message : String(broadcastErr),
+        });
+      }
     }
   } finally {
     // Always clean up WeakMap entries even if dispose throws.

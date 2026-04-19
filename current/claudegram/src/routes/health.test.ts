@@ -6,6 +6,7 @@ import { dispatch } from '../http.js';
 import type { RouterCtx } from '../http.js';
 import type { Hub, BroadcastPayload } from '../ws/hub.js';
 import type { MessageRepo, SessionRepo } from '../repo/types.js';
+import type { SessionRegistry } from '../ws/session-registry.js';
 
 // Minimal stub repos — no real DB interaction needed for repo methods.
 const stubMsgRepo: MessageRepo = {
@@ -13,6 +14,7 @@ const stubMsgRepo: MessageRepo = {
   findBySession: () => [],
   findBySessionPage: () => ({ messages: [], has_more: false }),
   findById: () => null,
+  deleteBySession: () => {},
 };
 
 const stubSessRepo: SessionRepo = {
@@ -20,6 +22,7 @@ const stubSessRepo: SessionRepo = {
   findById: () => null,
   findAll: () => [],
   updateLastReadAt: () => {},
+  delete: () => false,
 };
 
 const stubLogger = {
@@ -44,6 +47,15 @@ function makeStubHub(): Hub {
   };
 }
 
+const stubSessionRegistry: SessionRegistry = {
+  register: () => ({ [Symbol.dispose]: () => {} }),
+  tryRegister: () => ({ ok: true, disposable: { [Symbol.dispose]: () => {} } }),
+  send: () => ({ ok: true }),
+  unregister: () => {},
+  has: () => false,
+  get size() { return 0; },
+};
+
 let ctx: RouterCtx;
 
 beforeEach(() => {
@@ -65,6 +77,7 @@ beforeEach(() => {
       maxPwaConnections: 256,
       maxSessionConnections: 64,
     },
+    sessionRegistry: stubSessionRegistry,
     webRoot: '/tmp/__claudegram_test_nonexistent_web__',
   };
 });

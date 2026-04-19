@@ -41,6 +41,7 @@ describe('handleApiMessages', () => {
       findBySession: () => [],
       findBySessionPage: () => ({ messages: [], has_more: false }),
       findById: () => null,
+      deleteBySession: () => {},
     });
     const r = await handleApiMessages(makeReq('GET'), repo);
     expect(r.status).toBe(400);
@@ -61,6 +62,7 @@ describe('handleApiMessages', () => {
       findBySession: () => [],
       findBySessionPage,
       findById: () => null,
+      deleteBySession: () => {},
     });
 
     const r = await handleApiMessages(makeReq('GET', 'session_id=s1'), repo);
@@ -87,6 +89,7 @@ describe('handleApiMessages', () => {
       findBySession: () => [],
       findBySessionPage,
       findById: () => null,
+      deleteBySession: () => {},
     });
 
     await handleApiMessages(makeReq('GET', 'session_id=s1&before=m9&limit=10'), repo);
@@ -103,6 +106,7 @@ describe('handleApiMessages', () => {
       findBySession: () => [],
       findBySessionPage: () => ({ messages: [], has_more: false }),
       findById: () => null,
+      deleteBySession: () => {},
     });
     const r = await handleApiMessages(makeReq('GET', 'session_id=s1&limit=abc'), repo);
     expect(r.status).toBe(400);
@@ -121,6 +125,7 @@ describe('handleApiMessages', () => {
       findBySession: () => [],
       findBySessionPage,
       findById: () => null,
+      deleteBySession: () => {},
     });
 
     const r = await handleApiMessages(makeReq('GET', 'session_id=s1&limit=-1'), repo);
@@ -137,6 +142,7 @@ describe('handleApiMessages', () => {
       findBySession: () => [],
       findBySessionPage: () => ({ messages: [], has_more: false }),
       findById: () => null,
+      deleteBySession: () => {},
     });
     const r = await handleApiMessages(makeReq('POST'), repo);
     expect(r.status).toBe(405);
@@ -157,6 +163,7 @@ describe('handleApiMessages', () => {
         findBySession: () => [],
         findBySessionPage: (): never => { throw new Error('DB exploded'); },
         findById: () => null,
+        deleteBySession: () => {},
       } satisfies MessageRepo,
       logger: errorLogger,
     };

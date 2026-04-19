@@ -64,9 +64,9 @@ export function createServer(deps: ServerDeps): RunningServer {
   const hub = deps.hub ?? new InMemoryHub(config.maxPwaConnections);
   const sessionRegistry = deps.sessionRegistry ?? new InMemorySessionRegistry(config.maxSessionConnections, config.wsOutboundBufferCapBytes, logger);
   const webRoot = path.resolve(deps.webRoot ?? path.join(process.cwd(), 'web'));
-  const ctx = { msgRepo, sessRepo, logger, db, hub, config, webRoot };
+  const ctx = { msgRepo, sessRepo, logger, db, hub, config, webRoot, sessionRegistry };
 
-  const sessionSocketDeps = { config, sessRepo, sessionRegistry, logger };
+  const sessionSocketDeps = { config, sessRepo, sessionRegistry, hub, logger };
   const userSocketDeps: UserSocketDeps = {
     sessionRegistry,
     messageRepo: msgRepo,
@@ -150,7 +150,7 @@ export function createServer(deps: ServerDeps): RunningServer {
           logger.info('ws_close', { size: hub.size });
         } else {
           // kind === 'session-socket'
-          handleSessionSocketClose(ws, { sessionRegistry, logger });
+          handleSessionSocketClose(ws, { sessionRegistry, hub, sessRepo, logger });
         }
       },
       message: (ws, rawMessage) => {

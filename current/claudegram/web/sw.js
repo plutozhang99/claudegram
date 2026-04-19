@@ -1,4 +1,4 @@
-const VERSION = 'v1-p17';
+const VERSION = 'v1-p2hotfix3';
 const SHELL = [
   '/',
   '/web/style.css',

@@ -85,6 +85,7 @@ function makeDeps(overrides: Partial<{
       findBySession: mock(() => []),
       findBySessionPage: mock(() => ({ messages: [], has_more: false })),
       findById: mock(() => null),
+      deleteBySession: mock(() => {}),
       ...overrides.messageRepo,
     } as unknown as MessageRepo,
     sessionRepo: {
@@ -92,6 +93,7 @@ function makeDeps(overrides: Partial<{
       findById: mock(() => null),
       findAll: mock(() => []),
       updateLastReadAt: mock(() => {}),
+      delete: mock(() => false),
       ...overrides.sessionRepo,
     } as unknown as SessionRepo,
     hub: {
@@ -429,5 +431,110 @@ describe('handleUserSocketMessage — bad-frame counter', () => {
     // 1 more bad frame — counter was reset to 0 after good, so now at 1, not 5
     handleUserSocketMessage(ws, 'bad', deps);
     expect(ws.closedWith).toBeNull(); // still not closed, counter is now 1
+  });
+});
+
+// ── FIX 5: persist + broadcast PWA-originated messages ───────────────────────
+
+describe('handleUserSocketMessage — FIX 5: persist + broadcast on reply', () => {
+  it('reply hit → messageRepo.insert called with correct fields (id=client_msg_id, direction=user)', () => {
+    const insertMock = mock(() => {});
+    const deps = makeDeps({
+      messageRepo: { insert: insertMock },
+      sessionRegistry: { send: mock(() => ({ ok: true as const })) },
+    });
+
+    handleUserSocketMessage(ws, JSON.stringify({
+      type: 'reply',
+      session_id: 's1',
+      text: 'Hello FIX5',
+      client_msg_id: 'uuid-fix5',
+    }), deps);
+
+    expect(insertMock).toHaveBeenCalledTimes(1);
+    const insertArg = (insertMock as ReturnType<typeof mock>).mock.calls[0][0] as Record<string, unknown>;
+    expect(insertArg.id).toBe('uuid-fix5');
+    expect(insertArg.session_id).toBe('s1');
+    expect(insertArg.direction).toBe('user');
+    expect(insertArg.content).toBe('Hello FIX5');
+  });
+
+  it('reply hit → hub.broadcast called with {type:"message", session_id, message} before registry.send', () => {
+    const broadcastMock = mock(() => {});
+    const deps = makeDeps({
+      hub: { broadcast: broadcastMock },
+      sessionRegistry: { send: mock(() => ({ ok: true as const })) },
+    });
+
+    handleUserSocketMessage(ws, JSON.stringify({
+      type: 'reply',
+      session_id: 's1',
+      text: 'broadcast me',
+      client_msg_id: 'uuid-bc',
+    }), deps);
+
+    expect(broadcastMock).toHaveBeenCalledTimes(1);
+    const broadcastArg = (broadcastMock as ReturnType<typeof mock>).mock.calls[0][0] as Record<string, unknown>;
+    expect(broadcastArg.type).toBe('message');
+    expect(broadcastArg.session_id).toBe('s1');
+    const msg = broadcastArg.message as Record<string, unknown>;
+    expect(msg.id).toBe('uuid-bc');
+    expect(msg.direction).toBe('user');
+    expect(msg.content).toBe('broadcast me');
+  });
+
+  it('reply no_session → still persists + broadcasts before sending error frame', () => {
+    const insertMock = mock(() => {});
+    const broadcastMock = mock(() => {});
+    const deps = makeDeps({
+      messageRepo: { insert: insertMock },
+      hub: { broadcast: broadcastMock },
+      sessionRegistry: { send: mock(() => ({ ok: false as const, reason: 'no_session' as const })) },
+    });
+
+    handleUserSocketMessage(ws, JSON.stringify({
+      type: 'reply',
+      session_id: 's1',
+      text: 'offline msg',
+      client_msg_id: 'uuid-offline',
+    }), deps);
+
+    // Persisted + broadcast BEFORE the error frame
+    expect(insertMock).toHaveBeenCalledTimes(1);
+    expect(broadcastMock).toHaveBeenCalledTimes(1);
+    // Error frame also sent
+    expect(ws.sentMessages.length).toBe(1);
+    const errFrame = JSON.parse(ws.sentMessages[0]);
+    expect(errFrame.type).toBe('error');
+    expect(errFrame.reason).toBe('session_not_connected');
+  });
+
+  it('messageRepo.insert throws → error is swallowed and delivery still proceeds', () => {
+    const sendMock = mock(() => ({ ok: true as const }));
+    const broadcastMock = mock(() => {});
+    const logger = makeLogger();
+    const deps = makeDeps({
+      messageRepo: { insert: mock(() => { throw new Error('DB error'); }) },
+      hub: { broadcast: broadcastMock },
+      sessionRegistry: { send: sendMock },
+      logger,
+    });
+
+    // Should not throw despite insert failure
+    expect(() => {
+      handleUserSocketMessage(ws, JSON.stringify({
+        type: 'reply',
+        session_id: 's1',
+        text: 'hi',
+        client_msg_id: 'uuid-err',
+      }), deps);
+    }).not.toThrow();
+
+    // Delivery (registry.send) still happens
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    // Warning was logged
+    expect((logger.warn as ReturnType<typeof mock>).mock.calls.some(
+      (c) => (c[0] as string) === 'user_socket_reply_insert_failed',
+    )).toBe(true);
   });
 });

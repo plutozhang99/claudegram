@@ -17,6 +17,43 @@ P1: Full-stack PWA — HTTP ingest + SQLite store + WebSocket live updates + ins
 
 ---
 
+## Running the bridge locally
+
+These steps wire claudegram to a real Claude session via the fakechat plugin.
+
+1. **Install the fakechat fork** — replace the upstream plugin directory with a symlink to this repo's `current/fakechat/`:
+   ```bash
+   # Backup and replace the upstream plugin
+   ln -sfn /path/to/claudegram/current/fakechat \
+     ~/.claude/plugins/marketplaces/claude-plugins-official/external_plugins/fakechat
+   ```
+   Enable it in `~/.claude/settings.json` under `"enabledPlugins"`:
+   ```json
+   { "enabledPlugins": ["claude-plugins-official:fakechat"] }
+   ```
+
+2. **Set the bridge URL** in the shell that runs `claude`:
+   ```bash
+   export CLAUDEGRAM_URL=http://localhost:8788
+   ```
+
+3. **Start claudegram**:
+   ```bash
+   cd current/claudegram && bun run dev
+   ```
+   The server logs `server_ready { port: 8788 }` to stderr when ready.
+   (Use `bun run dev`, not `bun run src/server.ts` — the former sets the correct working directory for static assets.)
+
+4. **Start Claude** with the fakechat channel:
+   ```bash
+   claude --channels plugin:fakechat@claude-plugins-official
+   ```
+   Without `--channels`, fakechat does not spawn and no messages will flow through claudegram.
+
+Open `http://localhost:8788/` in a browser to see the PWA.
+
+---
+
 ## Quick start
 
 1. Install [Bun](https://bun.sh) >= 1.1.0.

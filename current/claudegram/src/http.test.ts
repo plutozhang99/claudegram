@@ -2,6 +2,7 @@ import { describe, it, expect, afterAll, mock, spyOn } from 'bun:test';
 import { dispatch, jsonResponse } from './http.js';
 import type { RouterCtx } from './http.js';
 import type { MessageRepo, SessionRepo } from './repo/types.js';
+import type { SessionRegistry } from './ws/session-registry.js';
 import { openDatabase, closeDatabase } from './db/client.js';
 import type { Hub, BroadcastPayload } from './ws/hub.js';
 
@@ -15,6 +16,7 @@ const stubMsgRepo: MessageRepo = {
   findBySession: () => [],
   findBySessionPage: () => ({ messages: [], has_more: false }),
   findById: () => null,
+  deleteBySession: () => {},
 };
 
 const stubSessRepo: SessionRepo = {
@@ -22,6 +24,7 @@ const stubSessRepo: SessionRepo = {
   findById: () => null,
   findAll: () => [],
   updateLastReadAt: () => {},
+  delete: () => false,
 };
 
 // Provide a real in-memory DB so RouterCtx is satisfied;
@@ -42,6 +45,15 @@ function makeStubHub(): Hub {
     get size() { return 0; },
   };
 }
+
+const stubSessionRegistry: SessionRegistry = {
+  register: () => ({ [Symbol.dispose]: () => {} }),
+  tryRegister: () => ({ ok: true, disposable: { [Symbol.dispose]: () => {} } }),
+  send: () => ({ ok: true }),
+  unregister: () => {},
+  has: () => false,
+  get size() { return 0; },
+};
 
 const ctx: RouterCtx = {
   msgRepo: stubMsgRepo,
@@ -64,6 +76,7 @@ const ctx: RouterCtx = {
     maxPwaConnections: 256,
     maxSessionConnections: 64,
   },
+  sessionRegistry: stubSessionRegistry,
   // Point at a nonexistent dir so static file handlers return 404 (no disk I/O needed).
   webRoot: '/tmp/__claudegram_test_nonexistent_web__',
 };

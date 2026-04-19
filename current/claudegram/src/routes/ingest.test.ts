@@ -6,9 +6,19 @@ import { SqliteMessageRepo, SqliteSessionRepo } from '../repo/sqlite.js';
 import { dispatch } from '../http.js';
 import type { RouterCtx } from '../http.js';
 import type { MessageRepo, SessionRepo } from '../repo/types.js';
+import type { SessionRegistry } from '../ws/session-registry.js';
 import type { Logger } from '../logger.js';
 import type { Hub, BroadcastPayload } from '../ws/hub.js';
 import { INGEST_MAX_BODY_BYTES } from './ingest.js';
+
+const stubSessionRegistry: SessionRegistry = {
+  register: () => ({ [Symbol.dispose]: () => {} }),
+  tryRegister: () => ({ ok: true, disposable: { [Symbol.dispose]: () => {} } }),
+  send: () => ({ ok: true }),
+  unregister: () => {},
+  has: () => false,
+  get size() { return 0; },
+};
 
 // ── Shared no-op logger ──────────────────────────────────────────────────────
 const noopLogger: Logger = {
@@ -86,6 +96,7 @@ describe('POST /ingest', () => {
         maxPwaConnections: 256,
         maxSessionConnections: 64,
       },
+      sessionRegistry: stubSessionRegistry,
       webRoot: '/tmp/__claudegram_test_nonexistent_web__',
     };
   });
@@ -287,6 +298,7 @@ describe('POST /ingest', () => {
       findBySession: () => [],
       findBySessionPage: () => ({ messages: [], has_more: false }),
       findById: () => null,
+      deleteBySession: () => {},
     };
 
     const stubSessRepo: SessionRepo = {
@@ -294,6 +306,7 @@ describe('POST /ingest', () => {
       findById: () => null,
       findAll: () => [],
       updateLastReadAt: () => {},
+      delete: () => false,
     };
 
     const stubCtx: RouterCtx = {
@@ -312,6 +325,7 @@ describe('POST /ingest', () => {
         maxPwaConnections: 256,
         maxSessionConnections: 64,
       },
+      sessionRegistry: stubSessionRegistry,
       webRoot: '/tmp/__claudegram_test_nonexistent_web__',
     };
 
@@ -410,6 +424,7 @@ describe('POST /ingest', () => {
       findBySession: () => [],
       findBySessionPage: () => ({ messages: [], has_more: false }),
       findById: () => null,
+      deleteBySession: () => {},
     };
 
     const throwingSessRepo: SessionRepo = {
@@ -417,6 +432,7 @@ describe('POST /ingest', () => {
       findById: () => null,
       findAll: () => [],
       updateLastReadAt: () => {},
+      delete: () => false,
     };
 
     const failCtx: RouterCtx = {
@@ -435,6 +451,7 @@ describe('POST /ingest', () => {
         maxPwaConnections: 256,
         maxSessionConnections: 64,
       },
+      sessionRegistry: stubSessionRegistry,
       webRoot: '/tmp/__claudegram_test_nonexistent_web__',
     };
 

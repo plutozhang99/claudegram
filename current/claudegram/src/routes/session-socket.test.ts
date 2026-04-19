@@ -5,6 +5,7 @@ import type { Config } from '../config.js';
 import type { SessionRepo } from '../repo/types.js';
 import type { SessionRegistry } from '../ws/session-registry.js';
 import type { SendResult as RegistrySendResult } from '../ws/session-registry.js';
+import type { Hub, BroadcastPayload } from '../ws/hub.js';
 import {
   checkSessionSocketAuth,
   sendWithBackpressure,
@@ -74,32 +75,47 @@ function makeSessionRepo(overrides: Partial<SessionRepo> = {}): SessionRepo {
     findById: () => null,
     findAll: () => [],
     updateLastReadAt: () => {},
+    delete: () => false,
     ...overrides,
   };
 }
 
 function makeSessionRegistry(overrides: Partial<SessionRegistry> = {}): SessionRegistry {
   let _size = 0;
+  const _registered = new Set<string>();
   return {
     register: (_id: string, _ws: ServerWebSocket<unknown>): Disposable => {
       _size++;
+      _registered.add(_id);
       return {
-        [Symbol.dispose]: () => { _size = Math.max(0, _size - 1); },
+        [Symbol.dispose]: () => { _size = Math.max(0, _size - 1); _registered.delete(_id); },
       };
     },
     tryRegister: (_id: string, _ws: ServerWebSocket<unknown>) => {
       _size++;
+      _registered.add(_id);
       return {
         ok: true as const,
         disposable: {
-          [Symbol.dispose]: () => { _size = Math.max(0, _size - 1); },
+          [Symbol.dispose]: () => { _size = Math.max(0, _size - 1); _registered.delete(_id); },
         },
       };
     },
-    unregister: (_id: string) => { _size = Math.max(0, _size - 1); },
+    unregister: (_id: string) => { _size = Math.max(0, _size - 1); _registered.delete(_id); },
     send: (_id: string, _payload: Parameters<SessionRegistry['send']>[1]): RegistrySendResult => ({ ok: true }),
+    has: (_id: string) => _registered.has(_id),
     get size() { return _size; },
     ...overrides,
+  };
+}
+
+function makeHub(broadcasts: BroadcastPayload[] = []): Hub {
+  return {
+    add: () => {},
+    tryAdd: () => ({ ok: true as const }),
+    remove: () => {},
+    broadcast: (payload: BroadcastPayload) => { broadcasts.push(payload); },
+    get size() { return 0; },
   };
 }
 
@@ -230,6 +246,7 @@ describe('handleSessionSocketMessage — register', () => {
       config: makeConfig(),
       sessRepo,
       sessionRegistry,
+      hub: makeHub(),
       logger: noopLogger,
     };
 
@@ -258,6 +275,7 @@ describe('handleSessionSocketMessage — register', () => {
       config: makeConfig(),
       sessRepo,
       sessionRegistry: makeSessionRegistry(),
+      hub: makeHub(),
       logger: noopLogger,
     };
 
@@ -285,6 +303,7 @@ describe('handleSessionSocketMessage — register', () => {
       config: makeConfig(),
       sessRepo: makeSessionRepo(),
       sessionRegistry,
+      hub: makeHub(),
       logger: noopLogger,
     };
 
@@ -309,6 +328,7 @@ describe('handleSessionSocketMessage — register', () => {
       config: makeConfig(),
       sessRepo: makeSessionRepo(),
       sessionRegistry,
+      hub: makeHub(),
       logger: noopLogger,
     };
 
@@ -337,6 +357,7 @@ describe('handleSessionSocketMessage — register', () => {
       config: makeConfig(),
       sessRepo: makeSessionRepo(),
       sessionRegistry,
+      hub: makeHub(),
       logger: noopLogger,
     };
 
@@ -370,6 +391,7 @@ describe('handleSessionSocketMessage — register', () => {
       config: makeConfig(),
       sessRepo: makeSessionRepo(),
       sessionRegistry,
+      hub: makeHub(),
       logger,
     };
 
@@ -398,6 +420,7 @@ describe('handleSessionSocketMessage — register', () => {
       config: makeConfig(),
       sessRepo,
       sessionRegistry,
+      hub: makeHub(),
       logger: noopLogger,
     };
 
@@ -429,6 +452,7 @@ describe('handleSessionSocketMessage — register', () => {
       config: makeConfig(),
       sessRepo: makeSessionRepo(),
       sessionRegistry,
+      hub: makeHub(),
       logger: noopLogger,
     };
 
@@ -466,6 +490,7 @@ describe('handleSessionSocketClose', () => {
       config: makeConfig(),
       sessRepo: makeSessionRepo(),
       sessionRegistry,
+      hub: makeHub(),
       logger: noopLogger,
     };
 
@@ -477,14 +502,14 @@ describe('handleSessionSocketClose', () => {
     );
 
     expect(disposed).toBe(false);
-    handleSessionSocketClose(ws, { sessionRegistry, logger: noopLogger });
+    handleSessionSocketClose(ws, { sessionRegistry, hub: makeHub(), sessRepo: makeSessionRepo(), logger: noopLogger });
     expect(disposed).toBe(true);
   });
 
   it('close without prior register → does not throw', () => {
     const ws = makeStubWs();
     const sessionRegistry = makeSessionRegistry();
-    expect(() => handleSessionSocketClose(ws, { sessionRegistry, logger: noopLogger })).not.toThrow();
+    expect(() => handleSessionSocketClose(ws, { sessionRegistry, hub: makeHub(), sessRepo: makeSessionRepo(), logger: noopLogger })).not.toThrow();
   });
 
   it('duplicate close → idempotent, does not throw', () => {
@@ -501,6 +526,7 @@ describe('handleSessionSocketClose', () => {
       config: makeConfig(),
       sessRepo: makeSessionRepo(),
       sessionRegistry,
+      hub: makeHub(),
       logger: noopLogger,
     };
 
@@ -511,8 +537,8 @@ describe('handleSessionSocketClose', () => {
       deps,
     );
 
-    handleSessionSocketClose(ws, { sessionRegistry, logger: noopLogger });
-    expect(() => handleSessionSocketClose(ws, { sessionRegistry, logger: noopLogger })).not.toThrow();
+    handleSessionSocketClose(ws, { sessionRegistry, hub: makeHub(), sessRepo: makeSessionRepo(), logger: noopLogger });
+    expect(() => handleSessionSocketClose(ws, { sessionRegistry, hub: makeHub(), sessRepo: makeSessionRepo(), logger: noopLogger })).not.toThrow();
     // The Disposable is only invoked once because wsState is cleared on first close.
     expect(disposeCount).toBe(1);
   });
@@ -536,6 +562,7 @@ describe('handleSessionSocketClose', () => {
       config: makeConfig(),
       sessRepo: makeSessionRepo(),
       sessionRegistry,
+      hub: makeHub(),
       logger,
     };
 
@@ -547,12 +574,12 @@ describe('handleSessionSocketClose', () => {
     );
 
     // close handler must NOT throw even if dispose() throws
-    expect(() => handleSessionSocketClose(ws, { sessionRegistry, logger })).not.toThrow();
+    expect(() => handleSessionSocketClose(ws, { sessionRegistry, hub: makeHub(), sessRepo: makeSessionRepo(), logger })).not.toThrow();
     // warn should have been logged
     expect(warnCalls).toContain('session_socket_dispose_failed');
 
     // second close is idempotent (wsState was already cleaned up)
-    expect(() => handleSessionSocketClose(ws, { sessionRegistry, logger })).not.toThrow();
+    expect(() => handleSessionSocketClose(ws, { sessionRegistry, hub: makeHub(), sessRepo: makeSessionRepo(), logger })).not.toThrow();
   });
 });
 
@@ -574,6 +601,7 @@ describe('duplicate register', () => {
       config: makeConfig(),
       sessRepo: makeSessionRepo(),
       sessionRegistry,
+      hub: makeHub(),
       logger: noopLogger,
     };
 
@@ -605,5 +633,93 @@ describe('sendWithBackpressure — buffer_full', () => {
     const ws = makeStubWs({ bufferedAmount: 2_000_000 });
     const result = sendWithBackpressure(ws, '{}', 1_048_576);
     expect(result).toEqual({ ok: false, reason: 'buffer_full' });
+  });
+});
+
+// ── FIX 2/3/4: connected-state broadcast ─────────────────────────────────────
+
+describe('FIX 2/3 — session_socket broadcasts connected:true on register', () => {
+  it('successful register → hub.broadcast called with {type:"session_update", session:{...connected:true}}', () => {
+    const broadcasts: BroadcastPayload[] = [];
+    const hub = makeHub(broadcasts);
+
+    const session = {
+      id: 'sess-bc',
+      name: 'Broadcast Session',
+      first_seen_at: 1000,
+      last_seen_at: 2000,
+      status: 'active' as const,
+      last_read_at: 0,
+    };
+    const sessRepo = makeSessionRepo({
+      findById: (id: string) => id === 'sess-bc' ? session : null,
+    });
+
+    const ws = makeStubWs();
+    const deps = {
+      config: makeConfig(),
+      sessRepo,
+      sessionRegistry: makeSessionRegistry(),
+      hub,
+      logger: noopLogger,
+    };
+
+    handleSessionSocketOpen(ws, deps);
+    handleSessionSocketMessage(
+      ws,
+      JSON.stringify({ type: 'register', session_id: 'sess-bc' }),
+      deps,
+    );
+
+    const sessionUpdateBroadcasts = broadcasts.filter((b) => b.type === 'session_update');
+    expect(sessionUpdateBroadcasts).toHaveLength(1);
+    const payload = sessionUpdateBroadcasts[0] as unknown as { type: 'session_update'; session: Record<string, unknown> };
+    expect(payload.session.id).toBe('sess-bc');
+    expect(payload.session.connected).toBe(true);
+  });
+});
+
+describe('FIX 4 — session_socket broadcasts connected:false on close', () => {
+  it('close after register → hub.broadcast called with {type:"session_update", session:{...connected:false}}', () => {
+    const session = {
+      id: 'sess-close-bc',
+      name: 'Close Broadcast Session',
+      first_seen_at: 1000,
+      last_seen_at: 2000,
+      status: 'active' as const,
+      last_read_at: 0,
+    };
+    const sessRepo = makeSessionRepo({
+      findById: (id: string) => id === 'sess-close-bc' ? session : null,
+    });
+
+    const broadcasts: BroadcastPayload[] = [];
+    const hub = makeHub(broadcasts);
+
+    const ws = makeStubWs();
+    const deps = {
+      config: makeConfig(),
+      sessRepo,
+      sessionRegistry: makeSessionRegistry(),
+      hub,
+      logger: noopLogger,
+    };
+
+    handleSessionSocketOpen(ws, deps);
+    handleSessionSocketMessage(
+      ws,
+      JSON.stringify({ type: 'register', session_id: 'sess-close-bc' }),
+      deps,
+    );
+
+    // Clear broadcasts from register phase, then close.
+    broadcasts.length = 0;
+    handleSessionSocketClose(ws, { sessionRegistry: makeSessionRegistry(), hub, sessRepo, logger: noopLogger });
+
+    const sessionUpdateBroadcasts = broadcasts.filter((b) => b.type === 'session_update');
+    expect(sessionUpdateBroadcasts).toHaveLength(1);
+    const payload = sessionUpdateBroadcasts[0] as unknown as { type: 'session_update'; session: Record<string, unknown> };
+    expect(payload.session.id).toBe('sess-close-bc');
+    expect(payload.session.connected).toBe(false);
   });
 });

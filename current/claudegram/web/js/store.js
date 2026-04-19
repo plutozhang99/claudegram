@@ -75,10 +75,21 @@ export function createStore() {
 
     const prev = state.messagesBySession.get(sessionId);
     state.messagesBySession = new Map(state.messagesBySession);
-    state.messagesBySession.set(sessionId, [...prev, message]);
 
-    // Bump unread count if not the active session
-    if (sessionId !== state.activeId) {
+    // FIX 5 dedup: if an incoming message id matches an existing pending message
+    // (optimistic echo), REPLACE it rather than appending a duplicate.
+    const existingIdx = prev.findIndex((m) => m.id === message.id);
+    if (existingIdx !== -1) {
+      const updated = prev.slice();
+      updated[existingIdx] = { ...message, pending: false };
+      state.messagesBySession.set(sessionId, updated);
+    } else {
+      state.messagesBySession.set(sessionId, [...prev, message]);
+    }
+
+    // Bump unread count if not the active session (only for assistant messages,
+    // since the user originated this message themselves).
+    if (sessionId !== state.activeId && message.direction !== 'user') {
       const session = state.sessions.get(sessionId);
       if (session) {
         state.sessions = new Map(state.sessions);
@@ -93,10 +104,68 @@ export function createStore() {
   }
 
   function applySessionUpdate(session) {
+    // FIX 7: if the server signals deletion, remove from state rather than upsert.
+    if (session.deleted === true) {
+      state.sessions = new Map(state.sessions);
+      state.sessions.delete(session.id);
+      // If the deleted session was active, deactivate.
+      if (state.activeId === session.id) {
+        state.activeId = null;
+      }
+      emit('change');
+      return;
+    }
     state.sessions = new Map(state.sessions);
     const existing = state.sessions.get(session.id) ?? {};
     state.sessions.set(session.id, { ...existing, ...session });
     emit('change');
+  }
+
+  function applySessionDeleted(sessionId) {
+    state.sessions = new Map(state.sessions);
+    state.sessions.delete(sessionId);
+    if (state.activeId === sessionId) {
+      state.activeId = null;
+    }
+    emit('change');
+  }
+
+  /**
+   * Append a locally-originated message (e.g. the user just hit send) to the
+   * active session. Carries a `pending: true` flag so the renderer can style
+   * it distinctly. client_msg_id lets us correlate a later error frame.
+   * No-op if the target session isn't hydrated yet.
+   * @param {string} sessionId
+   * @param {object} message
+   */
+  function applyPendingMessage(sessionId, message) {
+    if (!state.messagesBySession.has(sessionId)) return;
+    const prev = state.messagesBySession.get(sessionId);
+    state.messagesBySession = new Map(state.messagesBySession);
+    state.messagesBySession.set(sessionId, [...prev, message]);
+    emit('change');
+  }
+
+  /**
+   * Mark a pending message as failed, keyed by client_msg_id. Used when
+   * claudegram returns {type:'error', client_msg_id, reason}.
+   * @param {string} clientMsgId
+   * @param {string} reason
+   */
+  function markPendingFailed(clientMsgId, reason) {
+    let changed = false;
+    for (const [sid, messages] of state.messagesBySession) {
+      const idx = messages.findIndex((m) => m.client_msg_id === clientMsgId && m.pending);
+      if (idx === -1) continue;
+      const copy = messages.slice();
+      copy[idx] = { ...copy[idx], pending: false, failed: true, failed_reason: reason };
+      if (!changed) {
+        state.messagesBySession = new Map(state.messagesBySession);
+        changed = true;
+      }
+      state.messagesBySession.set(sid, copy);
+    }
+    if (changed) emit('change');
   }
 
   /** @type {Set<string>} */
@@ -123,6 +192,9 @@ export function createStore() {
     applyMessages,
     applyLiveMessage,
     applySessionUpdate,
+    applySessionDeleted,
+    applyPendingMessage,
+    markPendingFailed,
     hydrateMessages,
   };
 }

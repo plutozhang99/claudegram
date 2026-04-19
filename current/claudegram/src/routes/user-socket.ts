@@ -53,8 +53,53 @@ function handleReplyFrame(
   frame: ReplyFrame,
   deps: UserSocketDeps,
 ): void {
-  const { sessionRegistry, logger, outboundBufferCapBytes } = deps;
+  const { sessionRegistry, messageRepo, hub, logger, outboundBufferCapBytes } = deps;
   const { session_id, text, reply_to, client_msg_id } = frame;
+
+  // FIX 5: Persist the PWA-originated message to the DB before forwarding.
+  // Uses client_msg_id as the message id — UUIDs are unique enough, and
+  // INSERT OR IGNORE (ON CONFLICT DO NOTHING) makes retries idempotent.
+  const now = Date.now();
+  const persistedMessage = {
+    session_id,
+    id: client_msg_id,
+    direction: 'user' as const,
+    ts: now,
+    content: text,
+  };
+  try {
+    messageRepo.insert(persistedMessage);
+  } catch (insertErr) {
+    logger.warn('user_socket_reply_insert_failed', {
+      session_id,
+      client_msg_id,
+      err: insertErr instanceof Error ? insertErr.message : String(insertErr),
+    });
+    // Continue — don't block delivery on a DB error.
+  }
+
+  // Broadcast the persisted message to all connected PWAs so the sender
+  // and other tabs see it immediately. The echo uses the full message shape.
+  try {
+    hub.broadcast({
+      type: 'message',
+      session_id,
+      message: {
+        session_id,
+        id: client_msg_id,
+        direction: 'user',
+        ts: now,
+        ingested_at: now,
+        content: text,
+      },
+    });
+  } catch (broadcastErr) {
+    logger.warn('user_socket_reply_broadcast_failed', {
+      session_id,
+      client_msg_id,
+      err: broadcastErr instanceof Error ? broadcastErr.message : String(broadcastErr),
+    });
+  }
 
   const payload = {
     type: 'reply' as const,
@@ -67,7 +112,7 @@ function handleReplyFrame(
   const result = sessionRegistry.send(session_id, payload);
 
   if (result.ok) {
-    // Success — no ack frame back to PWA; it will see the reply echo via /ingest in P2.4
+    // Success — message persisted + broadcast above; forwarded to fakechat.
     return;
   }
 

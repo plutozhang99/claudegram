@@ -66,6 +66,9 @@ export interface SessionRegistry {
   /** Remove the registration for `session_id` (no-op if not registered). */
   unregister(session_id: string): void;
 
+  /** Returns true if a socket is currently registered for session_id. */
+  has(session_id: string): boolean;
+
   /** Number of currently registered sessions. */
   readonly size: number;
 }
@@ -173,6 +176,10 @@ export class InMemorySessionRegistry implements SessionRegistry {
 
   unregister(session_id: string): void {
     this.sockets.delete(session_id);
+  }
+
+  has(session_id: string): boolean {
+    return this.sockets.has(session_id);
   }
 
   get size(): number {

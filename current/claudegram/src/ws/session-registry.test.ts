@@ -376,3 +376,50 @@ describe('InMemorySessionRegistry', () => {
     expect(registry.size).toBe(cap);
   });
 });
+
+// ── has() method tests ────────────────────────────────────────────────────────
+
+describe('InMemorySessionRegistry.has()', () => {
+  it('has() returns false before any registration', () => {
+    const registry = new InMemorySessionRegistry();
+    expect(registry.has('sess-1')).toBe(false);
+  });
+
+  it('has() returns true after register()', () => {
+    const registry = new InMemorySessionRegistry();
+    const ws = makeStubWs();
+    registry.register('sess-1', ws);
+    expect(registry.has('sess-1')).toBe(true);
+  });
+
+  it('has() returns true after tryRegister()', () => {
+    const registry = new InMemorySessionRegistry();
+    const ws = makeStubWs();
+    registry.tryRegister('sess-1', ws);
+    expect(registry.has('sess-1')).toBe(true);
+  });
+
+  it('has() returns false after dispose() (unregister)', () => {
+    const registry = new InMemorySessionRegistry();
+    const ws = makeStubWs();
+    const { disposable } = registry.tryRegister('sess-1', ws) as { ok: true; disposable: Disposable };
+    expect(registry.has('sess-1')).toBe(true);
+    disposable[Symbol.dispose]();
+    expect(registry.has('sess-1')).toBe(false);
+  });
+
+  it('has() returns false after unregister()', () => {
+    const registry = new InMemorySessionRegistry();
+    const ws = makeStubWs();
+    registry.register('sess-1', ws);
+    registry.unregister('sess-1');
+    expect(registry.has('sess-1')).toBe(false);
+  });
+
+  it('has() is independent for distinct session IDs', () => {
+    const registry = new InMemorySessionRegistry();
+    registry.register('sess-1', makeStubWs());
+    expect(registry.has('sess-1')).toBe(true);
+    expect(registry.has('sess-2')).toBe(false);
+  });
+});

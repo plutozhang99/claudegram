@@ -8,7 +8,8 @@ export interface UserSocketData {
 
 export type BroadcastPayload =
   | { readonly type: 'message'; readonly session_id: string; readonly message: Message }
-  | { readonly type: 'session_update'; readonly session: Session };
+  | { readonly type: 'session_update'; readonly session: Session & { readonly connected?: boolean; readonly deleted?: boolean } }
+  | { readonly type: 'session_deleted'; readonly session_id: string };
 
 export type TryAddResult = { readonly ok: true } | { readonly ok: false; readonly reason: 'cap_exceeded' };
 

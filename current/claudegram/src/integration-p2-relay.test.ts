@@ -343,7 +343,7 @@ describe('2.6b — mark_read round-trip: unread_count drops to 0 after mark_read
 // ── Test 3: Echo dedup proof (2.6c) ─────────────────────────────────────────
 
 describe('2.6c — Echo dedup: no double-broadcast when fakechat correctly skips re-ingest', () => {
-  it('PWA observer sees no {type:"message"} broadcast when no /ingest is posted (the claudegram side of dedup)', async () => {
+  it('PWA observer sees exactly ONE {type:"message",direction:"user"} broadcast when PWA replies (FIX 5: direct persist+broadcast, no /ingest)', async () => {
     const SESSION_ID = 'sess-e2e-dedup';
     const CLIENT_MSG_ID = 'cm-echo';
 
@@ -359,7 +359,7 @@ describe('2.6c — Echo dedup: no double-broadcast when fakechat correctly skips
       // Wait deterministically for the register frame to be processed.
       await waitForSessionRegistered(`http://localhost:${srv.port}`, SESSION_ID);
 
-      // 2. Open two PWA connections (observer1 sends, observer2 watches for any message).
+      // 2. Open two PWA connections (observer1 sends, observer2 watches broadcasts).
       const pwaWs1 = await openUserSocket(srv.port);
       const pwaWs2 = await openUserSocket(srv.port);
       try {
@@ -375,18 +375,28 @@ describe('2.6c — Echo dedup: no double-broadcast when fakechat correctly skips
           `relay of {type:'reply', client_msg_id:'${CLIENT_MSG_ID}', origin:'pwa'} to session-socket`,
         );
 
-        // 4. Assert observer (PWA-2) does NOT receive any {type:'message'} broadcast
-        //    while we wait (because no /ingest is posted — fakechat correctly skips).
-        //    We run the assertion concurrently with the relay wait.
-        const noMessagePromise = assertNoMessage(
-          pwaWs2,
-          (msg) => typeof msg === 'object' && msg !== null && (msg as Record<string, unknown>)['type'] === 'message',
-          800, // 800ms window — comfortably longer than relay round-trip
-          '{type:"message"} should NOT appear (no re-ingest was posted)',
-        );
+        // 4. Collect ALL {type:'message'} events on observer (PWA-2) within 800ms.
+        //    FIX 5: claudegram now persists + broadcasts PWA-originated messages directly,
+        //    so observer sees EXACTLY ONE {type:'message', direction:'user'} broadcast.
+        //    No /ingest is posted by fake-fakechat (the dedup contract), so no second broadcast appears.
+        const received: Array<Record<string, unknown>> = [];
+        const collectorPromise = new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, 800);
+          pwaWs2.addEventListener('message', (e: MessageEvent) => {
+            let parsed: unknown;
+            try { parsed = JSON.parse(e.data as string); } catch { return; }
+            if (
+              typeof parsed === 'object' && parsed !== null &&
+              (parsed as Record<string, unknown>)['type'] === 'message'
+            ) {
+              received.push(parsed as Record<string, unknown>);
+              if (received.length >= 2) clearTimeout(timer); // early-exit on duplicate detection
+            }
+          });
+        });
 
-        // 5. PWA-1 sends a reply — claudegram relays to fakechat; fakechat is
-        //    simulated by our raw WS which does NOT call /ingest back.
+        // 5. PWA-1 sends a reply — claudegram persists it, broadcasts it, and relays to fakechat.
+        //    Fake-fakechat (our raw WS) does NOT call /ingest back (correct dedup behavior).
         pwaWs1.send(JSON.stringify({
           type: 'reply',
           session_id: SESSION_ID,
@@ -399,9 +409,19 @@ describe('2.6c — Echo dedup: no double-broadcast when fakechat correctly skips
         expect(forwarded['type']).toBe('reply');
         expect(forwarded['origin']).toBe('pwa');
 
-        // 7. No /ingest was posted, so no {type:'message'} broadcast is expected.
-        //    assertNoMessage resolves cleanly after the 800ms window.
-        await noMessagePromise;
+        // 7. Wait for collector window to close (800ms).
+        await collectorPromise;
+
+        // 8. Observer should have received EXACTLY ONE {type:'message'} (the FIX 5 direct broadcast).
+        //    If fakechat had wrongly called /ingest, received would contain 2 events.
+        const msgEvents = received.filter(
+          (m) => (m['message'] as Record<string, unknown>)?.['direction'] === 'user',
+        );
+        expect(
+          msgEvents.length,
+          `expected exactly 1 user-message broadcast from FIX 5; got ${msgEvents.length}. All: ${JSON.stringify(received)}`,
+        ).toBe(1);
+        expect((msgEvents[0]!['message'] as Record<string, unknown>)?.['id']).toBe(CLIENT_MSG_ID);
       } finally {
         await closeWs(pwaWs1);
         await closeWs(pwaWs2);
