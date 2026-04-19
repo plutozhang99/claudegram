@@ -16,6 +16,7 @@ import { readFileSync, writeFileSync, mkdirSync, statSync, copyFileSync } from '
 import { homedir } from 'os'
 import { join, extname, basename } from 'path'
 import type { ServerWebSocket } from 'bun'
+import { ClaudegramClient } from './src/claudegram-client'
 
 // ---------------------------------------------------------------------------
 // Phase 4.1 — Claudegram env vars (optional; empty = upstream-identical behavior)
@@ -92,6 +93,20 @@ export function getSessionId(stateDir: string = STATE_DIR): string {
 
 // SESSION_ID is available for Phase 4.3+ (webhook, registration, etc.).
 const SESSION_ID = getSessionId(STATE_DIR)
+
+// ---------------------------------------------------------------------------
+// Phase P2.4 — ClaudegramClient (reverse WS + bounded retry queue)
+// Instantiated only when CLAUDEGRAM_URL is set; otherwise fakechat is
+// upstream-identical (§4.5 no-opt-in guarantee).
+// ---------------------------------------------------------------------------
+const client: ClaudegramClient | null = CLAUDEGRAM_URL
+  ? new ClaudegramClient({
+      url: CLAUDEGRAM_URL,
+      serviceTokenId: CLAUDEGRAM_SERVICE_TOKEN_ID || undefined,
+      serviceTokenSecret: CLAUDEGRAM_SERVICE_TOKEN_SECRET || undefined,
+      sessionId: SESSION_ID,
+    })
+  : null
 
 // ---------------------------------------------------------------------------
 // Phase 4.3a — postIngest webhook helper
@@ -370,7 +385,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         const id = nextId()
         broadcast({ type: 'msg', id, from: 'assistant', text, ts: Date.now(), replyTo, file })
         ids.push(id)
-        void postIngest({
+        client?.postIngest({
           session_id: SESSION_ID,
           session_name: undefined,
           message: {
@@ -379,6 +394,15 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
             ts: Date.now(),
             content: text,
           },
+        }).catch((err: unknown) => {
+          process.stderr.write(
+            JSON.stringify({
+              ts: new Date().toISOString(),
+              level: 'error',
+              msg: 'postIngest_failed',
+              err: err instanceof Error ? err.message : String(err),
+            }) + '\n',
+          )
         })
         return { content: [{ type: 'text', text: `sent (${ids.join(', ')})` }] }
       }
@@ -396,7 +420,25 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
 
 await mcp.connect(new StdioServerTransport())
 
-function deliver(id: string, text: string, file?: { path: string; name: string }): void {
+// ---------------------------------------------------------------------------
+// P2.4 — Wire ClaudegramClient: start reverse WS dial + register reply handler.
+// The client is null when CLAUDEGRAM_URL is unset (upstream-identical behavior).
+// ---------------------------------------------------------------------------
+if (client !== null) {
+  client.onReply(reply => {
+    // Inbound reply from claudegram PWA → deliver to MCP as a user-direction message.
+    // Pass _origin:'pwa' so deliver() skips the outbound /ingest POST (echo-dedup).
+    deliver(reply.client_msg_id, reply.text, undefined, 'pwa')
+  })
+  client.start()
+}
+
+function deliver(
+  id: string,
+  text: string,
+  file?: { path: string; name: string },
+  origin?: 'pwa',
+): void {
   // file_path goes in meta only — an in-content "[attached — Read: PATH]"
   // annotation is forgeable by typing that string into the UI.
   void mcp.notification({
@@ -409,7 +451,13 @@ function deliver(id: string, text: string, file?: { path: string; name: string }
       },
     },
   })
-  void postIngest({
+
+  // Echo-dedup (P2.4 Q1=a): when this message originated from claudegram (pwa),
+  // it is already persisted there — skip the outbound /ingest POST to avoid
+  // double-broadcasting the same message back.
+  if (origin === 'pwa') return
+
+  client?.postIngest({
     session_id: SESSION_ID,
     session_name: undefined,
     message: {
@@ -418,6 +466,15 @@ function deliver(id: string, text: string, file?: { path: string; name: string }
       ts: Date.now(),
       content: text || `(${file?.name ?? 'attachment'})`,
     },
+  }).catch((err: unknown) => {
+    process.stderr.write(
+      JSON.stringify({
+        ts: new Date().toISOString(),
+        level: 'error',
+        msg: 'postIngest_failed',
+        err: err instanceof Error ? err.message : String(err),
+      }) + '\n',
+    )
   })
 }
 
