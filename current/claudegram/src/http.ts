@@ -6,7 +6,7 @@ import type { Hub } from './ws/hub.js';
 import type { SessionRegistry } from './ws/session-registry.js';
 import { handleHealth } from './routes/health.js';
 import { handleIngest } from './routes/ingest.js';
-import { handleApiSessions, handleApiSessionDelete } from './routes/api/sessions.js';
+import { handleApiSessions, handleApiSessionDelete, handleApiSessionPatch } from './routes/api/sessions.js';
 import { handleApiMessages } from './routes/api/messages.js';
 import { handleApiMe } from './routes/api/me.js';
 import { handleRoot, handleWebAsset, serveStaticFile } from './routes/static.js';
@@ -60,10 +60,14 @@ export async function dispatch(req: Request, ctx: RouterCtx): Promise<Response> 
     return handleApiSessions(req, ctx);
   }
 
+  // PATCH /api/sessions/:id  (rename)
   // DELETE /api/sessions/:id
-  const sessionDeleteMatch = path.match(/^\/api\/sessions\/([^/]+)$/);
-  if (sessionDeleteMatch !== null) {
-    const id = decodeURIComponent(sessionDeleteMatch[1]!);
+  const sessionIdMatch = path.match(/^\/api\/sessions\/([^/]+)$/);
+  if (sessionIdMatch !== null) {
+    const id = decodeURIComponent(sessionIdMatch[1]!);
+    if (req.method === 'PATCH') {
+      return handleApiSessionPatch(req, id, ctx);
+    }
     return handleApiSessionDelete(req, id, ctx);
   }
 

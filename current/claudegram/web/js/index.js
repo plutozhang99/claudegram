@@ -11,7 +11,7 @@ import { createNotifier } from './notify.js';
 const store = createStore();
 const notifier = createNotifier();
 const ws = createWsClient(wsUrl());
-const renderer = createRenderer({ store, onSelectSession, onSendReply, onDeleteSession });
+const renderer = createRenderer({ store, onSelectSession, onSendReply, onDeleteSession, onRenameSession });
 
 ws.on('message', ({ session_id, message }) => {
   store.applyLiveMessage(session_id, message);
@@ -134,6 +134,32 @@ async function onDeleteSession(id) {
     console.error('deleteSession error', e);
   }
   return false;
+}
+
+/**
+ * Rename a session by id. Prompts the user for a new name and PATCHes the server.
+ * The server broadcasts session_update which the store will apply — no local mutation needed.
+ * @param {string} id
+ */
+async function onRenameSession(id) {
+  const current = store.state.sessions.get(id);
+  const next = prompt('Rename session', current?.name ?? id);
+  if (next === null) return; // user cancelled
+  const trimmed = next.trim();
+  if (trimmed.length === 0 || trimmed === current?.name) return;
+  try {
+    const res = await fetch(`/api/sessions/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: trimmed }),
+    });
+    if (!res.ok) {
+      console.error('renameSession: non-ok', res.status);
+    }
+    // On success, server broadcasts session_update which store.applySessionUpdate handles.
+  } catch (e) {
+    console.error('renameSession error', e);
+  }
 }
 
 // Boot sequence

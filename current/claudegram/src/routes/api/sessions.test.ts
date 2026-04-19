@@ -3,7 +3,7 @@ import type { SessionRepo, MessageRepo } from '../../repo/types.js';
 import type { SessionRegistry } from '../../ws/session-registry.js';
 import type { Hub, BroadcastPayload } from '../../ws/hub.js';
 import type { Logger } from '../../logger.js';
-import { handleApiSessions, handleApiSessionDelete } from './sessions.js';
+import { handleApiSessions, handleApiSessionDelete, handleApiSessionPatch } from './sessions.js';
 
 async function json(res: Response): Promise<Record<string, unknown>> {
   return res.json() as Promise<Record<string, unknown>>;
@@ -39,6 +39,7 @@ const emptyRepo = {
     findAll: () => [],
     updateLastReadAt: () => {},
     delete: () => false,
+    rename: () => false,
   } satisfies SessionRepo,
   sessionRegistry: makeRegistry(),
   logger: noopLogger,
@@ -47,6 +48,7 @@ const emptyRepo = {
 const twoItemSessRepo: SessionRepo = {
   upsert: () => {},
   findById: () => null,
+  rename: () => true,
   findAll: () => [
     {
       id: 'sess-1',
@@ -150,6 +152,7 @@ describe('handleApiSessions', () => {
         findAll: (): never[] => { throw new Error('DB exploded'); },
         updateLastReadAt: () => {},
         delete: () => false,
+        rename: () => false,
       } satisfies SessionRepo,
       sessionRegistry: makeRegistry(),
       logger: errorLogger,
@@ -196,6 +199,7 @@ function makeDeleteDeps(overrides: {
     findAll: () => [],
     updateLastReadAt: () => {},
     delete: overrides.deleteFn ?? (() => true),
+    rename: () => true,
   };
 
   const msgRepo: MessageRepo = {
@@ -264,6 +268,155 @@ describe('handleApiSessionDelete', () => {
     const deps = makeDeleteDeps();
     const req = new Request('http://localhost/api/sessions/sess-del', { method: 'GET' });
     const res = await handleApiSessionDelete(req, 'sess-del', deps);
+    expect(res.status).toBe(405);
+  });
+});
+
+// ── PATCH /api/sessions/:id (rename) tests ────────────────────────────────────
+
+const existingSession = {
+  id: 'sess-patch',
+  name: 'Original Name',
+  first_seen_at: 100,
+  last_seen_at: 200,
+  status: 'active' as const,
+  last_read_at: 0,
+};
+
+function makePatchDeps(overrides: {
+  findById?: () => ReturnType<SessionRepo['findById']>;
+  renameFn?: () => boolean;
+  broadcasts?: BroadcastPayload[];
+  connected?: Record<string, boolean>;
+} = {}) {
+  const broadcasts = overrides.broadcasts ?? [];
+  const hub: Hub = {
+    add: () => {},
+    tryAdd: () => ({ ok: true as const }),
+    remove: () => {},
+    broadcast: (p: BroadcastPayload) => { broadcasts.push(p); },
+    get size() { return 0; },
+  };
+
+  // By default: first call returns existing session (existence check),
+  // second call returns updated session (post-rename fetch).
+  let callCount = 0;
+  const defaultFindById = () => {
+    callCount++;
+    if (callCount === 1) return existingSession;
+    return { ...existingSession, name: 'New Name' };
+  };
+
+  const sessRepo: SessionRepo = {
+    upsert: () => {},
+    findById: overrides.findById ?? defaultFindById,
+    findAll: () => [],
+    updateLastReadAt: () => {},
+    delete: () => false,
+    rename: overrides.renameFn ?? (() => true),
+  };
+
+  const sessionRegistry = makeRegistry(overrides.connected ?? {});
+
+  return { sessRepo, hub, sessionRegistry, logger: noopLogger, broadcasts };
+}
+
+function makePatchReq(id: string, body: unknown): Request {
+  return new Request(`http://localhost/api/sessions/${id}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+describe('handleApiSessionPatch', () => {
+  it('PATCH existing session with valid name → 200 with updated session', async () => {
+    const deps = makePatchDeps();
+    const req = makePatchReq('sess-patch', { name: 'New Name' });
+    const res = await handleApiSessionPatch(req, 'sess-patch', deps);
+    expect(res.status).toBe(200);
+    const body = await res.json() as { ok: boolean; session: { name: string } };
+    expect(body.ok).toBe(true);
+    expect(body.session.name).toBe('New Name');
+  });
+
+  it('PATCH unknown session → 404', async () => {
+    const deps = makePatchDeps({ findById: () => null });
+    const req = makePatchReq('no-such-session', { name: 'Whatever' });
+    const res = await handleApiSessionPatch(req, 'no-such-session', deps);
+    expect(res.status).toBe(404);
+    const body = await res.json() as { ok: boolean };
+    expect(body.ok).toBe(false);
+  });
+
+  it('PATCH with empty name string → 400 (validation failed)', async () => {
+    const deps = makePatchDeps();
+    const req = makePatchReq('sess-patch', { name: '' });
+    const res = await handleApiSessionPatch(req, 'sess-patch', deps);
+    expect(res.status).toBe(400);
+    const body = await res.json() as { ok: boolean; error: string };
+    expect(body.ok).toBe(false);
+    expect(body.error).toBe('validation failed');
+  });
+
+  it('PATCH with name exceeding 200 chars → 400 (validation failed)', async () => {
+    const deps = makePatchDeps();
+    const longName = 'a'.repeat(201);
+    const req = makePatchReq('sess-patch', { name: longName });
+    const res = await handleApiSessionPatch(req, 'sess-patch', deps);
+    expect(res.status).toBe(400);
+    const body = await res.json() as { ok: boolean; error: string };
+    expect(body.ok).toBe(false);
+    expect(body.error).toBe('validation failed');
+  });
+
+  it('PATCH with missing name field → 400 (validation failed)', async () => {
+    const deps = makePatchDeps();
+    const req = makePatchReq('sess-patch', { notName: 'oops' });
+    const res = await handleApiSessionPatch(req, 'sess-patch', deps);
+    expect(res.status).toBe(400);
+    const body = await res.json() as { ok: boolean; error: string };
+    expect(body.ok).toBe(false);
+    expect(body.error).toBe('validation failed');
+  });
+
+  it('PATCH with invalid JSON → 400', async () => {
+    const deps = makePatchDeps();
+    const req = new Request('http://localhost/api/sessions/sess-patch', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: 'not json {{{',
+    });
+    const res = await handleApiSessionPatch(req, 'sess-patch', deps);
+    expect(res.status).toBe(400);
+    const body = await res.json() as { ok: boolean };
+    expect(body.ok).toBe(false);
+  });
+
+  it('PATCH → broadcasts {type:"session_update", session} with updated name', async () => {
+    const broadcasts: BroadcastPayload[] = [];
+    const deps = makePatchDeps({ broadcasts });
+    const req = makePatchReq('sess-patch', { name: 'New Name' });
+    await handleApiSessionPatch(req, 'sess-patch', deps);
+    const updateEvents = broadcasts.filter((b) => b.type === 'session_update');
+    expect(updateEvents).toHaveLength(1);
+    const evt = updateEvents[0] as { type: 'session_update'; session: { name: string } };
+    expect(evt.session.name).toBe('New Name');
+  });
+
+  it('PATCH → session in response includes connected:true when session is live', async () => {
+    const deps = makePatchDeps({ connected: { 'sess-patch': true } });
+    const req = makePatchReq('sess-patch', { name: 'New Name' });
+    const res = await handleApiSessionPatch(req, 'sess-patch', deps);
+    expect(res.status).toBe(200);
+    const body = await res.json() as { ok: boolean; session: { connected: boolean } };
+    expect(body.session.connected).toBe(true);
+  });
+
+  it('GET to PATCH endpoint → 405', async () => {
+    const deps = makePatchDeps();
+    const req = new Request('http://localhost/api/sessions/sess-patch', { method: 'GET' });
+    const res = await handleApiSessionPatch(req, 'sess-patch', deps);
     expect(res.status).toBe(405);
   });
 });

@@ -63,7 +63,9 @@ export function createStore() {
 
   function applyMessages(sessionId, messages, has_more) {
     state.messagesBySession = new Map(state.messagesBySession);
-    state.messagesBySession.set(sessionId, messages);
+    // Server returns DESC for pagination; reverse to chronological for display.
+    const chronological = Array.isArray(messages) ? messages.slice().reverse() : [];
+    state.messagesBySession.set(sessionId, chronological);
     state.hasMoreBySession = new Map(state.hasMoreBySession);
     state.hasMoreBySession.set(sessionId, has_more);
     emit('change');

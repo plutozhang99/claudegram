@@ -19,9 +19,10 @@ function formatTime(ts) {
  *   onSelectSession: (id: string) => void,
  *   onSendReply: (text: string) => boolean,
  *   onDeleteSession: (id: string) => Promise<boolean>,
+ *   onRenameSession: (id: string) => Promise<void>,
  * }} opts
  */
-export function createRenderer({ store, onSelectSession, onSendReply, onDeleteSession }) {
+export function createRenderer({ store, onSelectSession, onSendReply, onDeleteSession, onRenameSession }) {
   const sessionListEl = document.getElementById('session-list');
   const messagesEl = document.getElementById('messages');
   const composeTextEl = document.getElementById('compose-text');
@@ -98,13 +99,25 @@ export function createRenderer({ store, onSelectSession, onSendReply, onDeleteSe
 
       const unread = session.unread_count ?? 0;
       const badge = unread > 0 ? ` <span class="unread-badge" aria-label="${unread} unread">${unread}</span>` : '';
-      // FIX 2/3/4: show offline indicator when connected === false.
-      const offlineTag = session.connected === false
-        ? ' <span class="session-offline" aria-label="offline">(offline)</span>'
-        : '';
-      // FIX 7: delete button per session.
+
+      // FIX C: status dot — replaces inline (offline) text.
+      const dotState = session.connected === true ? 'online' : session.connected === false ? 'offline' : 'unknown';
+      const dotLabel = dotState === 'online' ? 'online' : dotState === 'offline' ? 'offline' : 'unknown';
+      const statusDot = `<span class="session-status-dot" data-state="${dotState}" aria-label="${dotLabel}" role="img"></span>`;
+
+      // FIX B: rename button (pencil affordance), FIX 7: delete button.
+      const renameBtn = `<button class="session-rename" aria-label="Rename session" title="Rename session">✎</button>`;
       const deleteBtn = `<button class="session-delete" aria-label="Delete session" title="Delete session">×</button>`;
-      li.innerHTML = `<span class="session-name">${escapeHtml(session.name ?? id)}</span>${offlineTag}${badge}${deleteBtn}`;
+      li.innerHTML = `${statusDot}<span class="session-name">${escapeHtml(session.name ?? id)}</span>${badge}${renameBtn}${deleteBtn}`;
+
+      // Wire rename button (each render replaces innerHTML so re-attach is required).
+      const renBtn = li.querySelector('.session-rename');
+      if (renBtn) {
+        renBtn.addEventListener('click', (e) => {
+          e.stopPropagation(); // don't trigger session selection
+          onRenameSession(id);
+        });
+      }
 
       // Wire delete button (each render replaces innerHTML so re-attach is required).
       const delBtn = li.querySelector('.session-delete');

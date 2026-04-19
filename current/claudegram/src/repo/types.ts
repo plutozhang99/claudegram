@@ -57,4 +57,9 @@ export interface SessionRepo {
    * calling this.
    */
   delete(id: string): boolean;
+  /**
+   * Rename a session. Returns true if the session was found and updated,
+   * false if no row matched (session does not exist).
+   */
+  rename(id: string, name: string): boolean;
 }

@@ -159,6 +159,7 @@ export class SqliteSessionRepo implements SessionRepo {
   private readonly stmtFindAll: ReturnType<Database['prepare']>;
   private readonly stmtUpdateLastReadAt: ReturnType<Database['prepare']>;
   private readonly stmtDelete: ReturnType<Database['prepare']>;
+  private readonly stmtRename: ReturnType<Database['prepare']>;
 
   constructor(private readonly db: Database) {
     this.stmtUpsert = db.prepare(
@@ -189,6 +190,8 @@ export class SqliteSessionRepo implements SessionRepo {
     );
 
     this.stmtDelete = db.prepare(`DELETE FROM sessions WHERE id=?`);
+
+    this.stmtRename = db.prepare(`UPDATE sessions SET name=? WHERE id=?`);
   }
 
   upsert(s: SessionUpsert): void {
@@ -209,6 +212,11 @@ export class SqliteSessionRepo implements SessionRepo {
 
   delete(id: string): boolean {
     const result = this.stmtDelete.run(id);
+    return (result as { changes: number }).changes > 0;
+  }
+
+  rename(id: string, name: string): boolean {
+    const result = this.stmtRename.run(name, id);
     return (result as { changes: number }).changes > 0;
   }
 }

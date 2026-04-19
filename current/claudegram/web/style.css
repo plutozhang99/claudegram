@@ -197,7 +197,6 @@ aside {
   border-left-color: var(--accent);
 }
 #session-list li[aria-selected="true"] .session-name { color: #fff; }
-#session-list li[aria-selected="true"] .session-offline,
 #session-list li[aria-selected="true"] .unread-badge { color: var(--surface2); }
 
 .session-name { font-weight: 400; letter-spacing: -0.01em; }
@@ -212,11 +211,39 @@ aside {
   margin-left: 0.4ch;
 }
 
-/* Sidebar: offline + delete affordances */
-.session-offline {
-  font-size: 0.7rem; color: var(--ink-dim); font-style: italic;
-  margin-left: 0.4ch; text-transform: uppercase; letter-spacing: 0.05em;
+/* Sidebar: status dot, rename + delete affordances */
+
+/* Per-session status dot (FIX C) */
+.session-status-dot {
+  display: inline-block;
+  width: 9px; height: 9px;
+  border-radius: 50%;
+  border: 1px solid var(--ink);
+  flex-shrink: 0;
+  margin-right: 0.5ch;
+  vertical-align: middle;
+  position: relative; top: -1px;
 }
+.session-status-dot[data-state="online"]  { background: var(--ink); }
+.session-status-dot[data-state="offline"] { background: var(--accent); }
+.session-status-dot[data-state="unknown"] { background: var(--surface3); }
+#session-list li[aria-selected="true"] .session-status-dot { border-color: var(--surface2); }
+#session-list li[aria-selected="true"] .session-status-dot[data-state="online"]  { background: var(--yellow); }
+#session-list li[aria-selected="true"] .session-status-dot[data-state="offline"] { background: var(--accent); }
+#session-list li[aria-selected="true"] .session-status-dot[data-state="unknown"] { background: var(--surface3); }
+
+/* Rename button (FIX B) */
+.session-rename {
+  position: absolute; top: 50%; right: 2rem; transform: translateY(-50%);
+  background: transparent; border: none; color: var(--ink-dim);
+  cursor: pointer; font-size: 1rem; padding: 0 0.4em; line-height: 1;
+  border-radius: var(--radius); opacity: 0;
+  transition: opacity 0.12s, color 0.12s, background 0.12s;
+}
+#session-list li:hover .session-rename { opacity: 0.7; }
+.session-rename:hover { opacity: 1 !important; color: var(--sunshine); background: var(--bg); }
+#session-list li[aria-selected="true"] .session-rename { color: var(--surface2); }
+
 .session-delete {
   position: absolute; top: 50%; right: 0.5rem; transform: translateY(-50%);
   background: transparent; border: none; color: var(--ink-dim);

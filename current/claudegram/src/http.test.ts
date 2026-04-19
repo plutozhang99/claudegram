@@ -25,6 +25,7 @@ const stubSessRepo: SessionRepo = {
   findAll: () => [],
   updateLastReadAt: () => {},
   delete: () => false,
+  rename: () => false,
 };
 
 // Provide a real in-memory DB so RouterCtx is satisfied;

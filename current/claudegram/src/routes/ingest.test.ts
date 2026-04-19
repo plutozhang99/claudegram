@@ -307,6 +307,7 @@ describe('POST /ingest', () => {
       findAll: () => [],
       updateLastReadAt: () => {},
       delete: () => false,
+      rename: () => false,
     };
 
     const stubCtx: RouterCtx = {
@@ -433,6 +434,7 @@ describe('POST /ingest', () => {
       findAll: () => [],
       updateLastReadAt: () => {},
       delete: () => false,
+      rename: () => false,
     };
 
     const failCtx: RouterCtx = {

@@ -76,6 +76,7 @@ function makeSessionRepo(overrides: Partial<SessionRepo> = {}): SessionRepo {
     findAll: () => [],
     updateLastReadAt: () => {},
     delete: () => false,
+    rename: () => false,
     ...overrides,
   };
 }

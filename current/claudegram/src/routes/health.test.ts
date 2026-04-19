@@ -23,6 +23,7 @@ const stubSessRepo: SessionRepo = {
   findAll: () => [],
   updateLastReadAt: () => {},
   delete: () => false,
+  rename: () => false,
 };
 
 const stubLogger = {

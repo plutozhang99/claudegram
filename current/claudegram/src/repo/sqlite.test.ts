@@ -503,6 +503,32 @@ describe('SqliteSessionRepo.updateLastReadAt', () => {
   });
 });
 
+// ── rename tests ──────────────────────────────────────────────────────────────
+
+describe('SqliteSessionRepo.rename', () => {
+  it('rename existing session → returns true and name is updated', () => {
+    sessRepo.upsert({ id: 'r1', name: 'Original', now: 1000 });
+    const result = sessRepo.rename('r1', 'Renamed');
+    expect(result).toBe(true);
+    const sess = sessRepo.findById('r1');
+    expect(sess).not.toBeNull();
+    expect(sess!.name).toBe('Renamed');
+  });
+
+  it('rename unknown session → returns false', () => {
+    const result = sessRepo.rename('no-such-id', 'Whatever');
+    expect(result).toBe(false);
+  });
+
+  it('rename with same name (idempotent) → returns true', () => {
+    sessRepo.upsert({ id: 'r2', name: 'Stable', now: 1000 });
+    const result = sessRepo.rename('r2', 'Stable');
+    expect(result).toBe(true);
+    const sess = sessRepo.findById('r2');
+    expect(sess!.name).toBe('Stable');
+  });
+});
+
 describe('SqliteMessageRepo.deleteBySession()', () => {
   it('deleteBySession removes all messages for a session', () => {
     sessRepo.upsert({ id: 'sess-del-msg', name: 'Test', now: 100 });
