@@ -1,6 +1,8 @@
 # claudegram
 
-P1: Full-stack PWA — HTTP ingest + SQLite store + WebSocket live updates + React PWA UI. Localhost only. No auth in P1.
+P1: Full-stack PWA — HTTP ingest + SQLite store + WebSocket live updates + installable PWA UI (vanilla ES modules, no framework, no build step). Localhost only. No auth in P1.
+
+**Verified 2026-04-19:** full smoke test run against a live daemon (curl + WebSocket client + real browser). All routes, WS broadcasts, static assets, path-traversal guards, and extension allowlist behave as specced.
 
 ---
 
@@ -8,7 +10,7 @@ P1: Full-stack PWA — HTTP ingest + SQLite store + WebSocket live updates + Rea
 
 | Feature | Details |
 |---|---|
-| **PWA** | React single-page app served at `/`; shows session list + message history |
+| **PWA** | Vanilla ES-module SPA served at `/`; sidebar session list + live message pane; installable (manifest + service worker) |
 | **WebSocket** | Live event stream at `/user-socket` — pushes `message` and `session_update` events as new messages arrive |
 | **REST API** | `GET /api/sessions`, `GET /api/messages`, `GET /api/me` |
 | **Ingest** | `POST /ingest` persists messages and broadcasts to all connected WS clients |
