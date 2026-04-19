@@ -37,6 +37,7 @@ let db: Database;
 function makeStubHub(): Hub {
   return {
     add: () => {},
+    tryAdd: () => ({ ok: true as const }),
     remove: () => {},
     broadcast: (_payload: BroadcastPayload) => {},
     get size() { return 0; },
@@ -61,6 +62,8 @@ beforeEach(() => {
       trustCfAccess: false,
       wsOutboundBufferCapBytes: 1_048_576,
       wsInboundMaxBadFrames: 5,
+      maxPwaConnections: 256,
+      maxSessionConnections: 64,
     },
     webRoot: '/tmp/__claudegram_test_nonexistent_web__',
   };

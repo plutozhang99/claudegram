@@ -10,6 +10,8 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     trustCfAccess: false,
     wsOutboundBufferCapBytes: 1_048_576,
     wsInboundMaxBadFrames: 5,
+    maxPwaConnections: 256,
+    maxSessionConnections: 64,
     ...overrides,
   };
 }

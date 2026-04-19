@@ -36,6 +36,7 @@ afterAll(() => {
 function makeStubHub(): Hub {
   return {
     add: () => {},
+    tryAdd: () => ({ ok: true as const }),
     remove: () => {},
     broadcast: (_payload: BroadcastPayload) => {},
     get size() { return 0; },
@@ -60,6 +61,8 @@ const ctx: RouterCtx = {
     trustCfAccess: false,
     wsOutboundBufferCapBytes: 1_048_576,
     wsInboundMaxBadFrames: 5,
+    maxPwaConnections: 256,
+    maxSessionConnections: 64,
   },
   // Point at a nonexistent dir so static file handlers return 404 (no disk I/O needed).
   webRoot: '/tmp/__claudegram_test_nonexistent_web__',
