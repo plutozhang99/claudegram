@@ -1,8 +1,147 @@
 # claudegram
 
-P1: Full-stack PWA — HTTP ingest + SQLite store + WebSocket live updates + installable PWA UI (vanilla ES modules, no framework, no build step). Localhost only. No auth in P1.
+A localhost PWA that surfaces your Claude Code fakechat conversations in a
+mobile-friendly web UI, with live context-window + rate-limit bars, session
+management, and bidirectional relay.
 
-**Verified 2026-04-19:** full smoke test run against a live daemon (curl + WebSocket client + real browser). All routes, WS broadcasts, static assets, path-traversal guards, and extension allowlist behave as specced.
+- Bun + TypeScript backend, SQLite persistence, WebSocket live updates
+- Vanilla ES-module frontend (no framework, no build step), installable PWA
+- Fakechat plugin fork sends messages over a reverse WebSocket
+
+**Current state (2026-04-19, pre-P3 hotfix 2):** channel-gated session
+registration, lazy fakechat connect, heartbeat-driven stale-connection cleanup,
+bulk "Clear offline" in the UI, and info-level statusline logging for easy
+diagnosis. See `docs/archive/PROGRESS-PRE-P3-HOTFIX2-2026-04-19.md` for the
+change history.
+
+---
+
+## Setup (first time)
+
+```bash
+# 1. Install Bun >= 1.1.0
+brew install oven-sh/bun/bun
+
+# 2. Install deps
+cd current/claudegram && bun install
+
+# 3. Symlink the fakechat fork into ~/.claude/plugins/
+ln -sfn "$(pwd)/../fakechat" \
+  ~/.claude/plugins/marketplaces/claude-plugins-official/external_plugins/fakechat
+```
+
+### Enable the fakechat plugin
+In `~/.claude/settings.json`:
+```json
+{
+  "enabledPlugins": { "fakechat@claude-plugins-official": true }
+}
+```
+
+### Wire fakechat → claudegram + statusline → claudegram
+Also in `~/.claude/settings.json` (under `"env"`):
+```json
+{
+  "env": {
+    "CLAUDEGRAM_URL": "http://localhost:8788",
+    "CLAUDEGRAM_STATUSLINE_URL": "http://localhost:8788/internal/statusline"
+  }
+}
+```
+
+- `CLAUDEGRAM_URL` — fakechat dials `$CLAUDEGRAM_URL/session-socket` on first
+  interaction to register the session.
+- `CLAUDEGRAM_STATUSLINE_URL` — the bundled `~/.claude/statusline-command.sh`
+  fire-and-forgets the raw statusline JSON here so ctx / 5h / 7d bars can
+  render in the compose area.
+
+If you don't already have `~/.claude/statusline-command.sh`, grab the one
+shipped with this repo (it handles both Claude Code's own CLI statusline
+and the claudegram bridge in one script).
+
+---
+
+## Running it
+
+Two terminals:
+
+```bash
+# Terminal 1 — claudegram server
+cd current/claudegram && bun run dev
+# → server_ready { port: 8788 }
+```
+
+```bash
+# Terminal 2 — Claude Code with fakechat channel
+claude --channels plugin:fakechat@claude-plugins-official
+```
+
+Then open **http://localhost:8788/** in a browser (and/or install as PWA).
+
+The fakechat web UI also runs per-Claude-Code-session at
+`http://localhost:878X` (port picked from 8787..8797; the exact port is
+printed to stderr when fakechat boots — look for `fakechat: http://…`).
+
+---
+
+## How sessions appear (important)
+
+> **Claudegram does NOT show a session until the fakechat plugin actually does
+> something.** Starting `claude --channels plugin:fakechat@claude-plugins-official`
+> is necessary but not sufficient.
+
+The fakechat MCP subprocess boots with Claude Code but connects to claudegram
+*lazily*. It dials `/session-socket` and sends the `register` frame on the
+first of these events:
+
+1. A user sends a message via the fakechat web UI (`deliver()` path), OR
+2. Claude Code calls fakechat's `reply` tool (assistant response path).
+
+**Before any interaction:** the session isn't registered, so it won't appear
+in claudegram's session list. This is intentional — it prevents ghost
+sessions from Claude Code instances that have fakechat in `.mcp.json` but
+weren't launched with `--channels`.
+
+**To make a session appear:** open its fakechat UI (URL printed to stderr
+when Claude Code starts), type anything and hit send. The session pops into
+claudegram's list immediately.
+
+---
+
+## Troubleshooting
+
+### New Claude Code is running but no session shows up
+You haven't interacted yet. See "How sessions appear" above. Open the
+fakechat UI for that Claude Code instance and send a message.
+
+### Old sessions showing `connected: false` that I don't want
+Click **Clear offline** in the sidebar header — bulk-deletes every session
+that's not currently live. Drops their messages too.
+
+### Two sessions cycling online/offline every 60 seconds
+An older Claude Code instance is still running with a pre-hotfix fakechat
+that has no pong handler. The heartbeat closes them every 60s
+(20s ping × 3 firings = 60s > 45s timeout) and they reconnect forever.
+Fix: close that Claude Code window and start a new one — the new fakechat
+subprocess will have the current code.
+
+### No ctx-window / rate-limit bars
+Check the `bun run dev` output:
+
+- **No `statusline_*` entries at all** → Claude Code's statusline hook isn't
+  POSTing. Verify `CLAUDEGRAM_STATUSLINE_URL` is set in the shell that
+  launches `claude` (see Setup). Make sure `~/.claude/statusline-command.sh`
+  has the POST block (grep it for `CLAUDEGRAM_STATUSLINE_URL`).
+- **`statusline_no_cwd_match` entries** → POSTs are arriving but fakechat
+  hasn't registered that cwd yet. Send one message in the fakechat UI to
+  trigger the lazy register, then the next statusline tick will match.
+- **`statusline_routed` entries** → happy path. If bars still don't show,
+  force-reload the PWA (service worker cache — Shift+Reload in Chrome) and
+  make sure the right session is selected in the sidebar.
+
+### Sidebar won't open on mobile
+Fixed in hotfix 1. If you still see it broken, hard-refresh the PWA to pick
+up the latest service worker (the cache version bumps per release).
 
 ---
 
@@ -51,6 +190,59 @@ These steps wire claudegram to a real Claude session via the fakechat plugin.
    Without `--channels`, fakechat does not spawn and no messages will flow through claudegram.
 
 Open `http://localhost:8788/` in a browser to see the PWA.
+
+---
+
+## Live statusline in the compose row (optional)
+
+claudegram can surface Claude Code's live statusline (model name, context-window %, 5h and 7d rate-limit %) directly under the message input of the currently selected session. No polling, no parsing `claude /status` — we reuse the same stdin JSON Claude Code already pipes into your configured statusline script.
+
+**How the bridge works:**
+
+- fakechat registers its `process.cwd()` on `/session-socket`. Claudegram keeps an in-memory `cwd → session_id` map.
+- `~/.claude/statusline-command.sh` fire-and-forget POSTs the raw stdin JSON to `$CLAUDEGRAM_STATUSLINE_URL` after emitting its normal stdout (used for Claude Code's own statusline — nothing there changes).
+- Claudegram's `POST /internal/statusline` (loopback-only) extracts `model`, `context_window.used_percentage`, and `rate_limits.{five_hour,seven_day}.used_percentage`, looks up the session by `cwd`, and broadcasts a `statusline` frame to connected PWAs.
+
+**Setup (one-time):**
+
+1. Make sure `~/.claude/statusline-command.sh` contains the POST block (already appended by this repo — check the top of the script for `CLAUDEGRAM_STATUSLINE_URL`). If you have a custom script, add:
+   ```sh
+   if [ -n "$CLAUDEGRAM_STATUSLINE_URL" ]; then
+     (printf '%s' "$input" | curl -s --max-time 0.5 \
+        -H 'Content-Type: application/json' --data-binary @- \
+        "$CLAUDEGRAM_STATUSLINE_URL" >/dev/null 2>&1 &) 2>/dev/null
+   fi
+   ```
+
+2. Export the endpoint URL in the shell that launches `claude`:
+   ```bash
+   export CLAUDEGRAM_STATUSLINE_URL=http://127.0.0.1:8788/internal/statusline
+   ```
+
+3. Start claudegram + Claude as usual (see "Running the bridge locally" above).
+
+**What you'll see:** once fakechat is connected and Claude Code has fired the statusline at least once, the compose row of the active session shows `model · ctx░░░░░░░░░░N% · 5h░░…N% · 7d░░…N%` with colour-coded bars (green < 70%, amber < 90%, red ≥ 90%). The layout wraps onto two rows on narrow mobile viewports.
+
+**Multi-session:** each claudegram session tracks its own snapshot, keyed by the cwd of the fakechat process that registered it. Switch sessions in the sidebar and the bars update.
+
+**Edge cases:**
+- Two `claude` processes in the same cwd → last POST wins (rare; not special-cased).
+- Fakechat running without `cwd` in its register frame → that session's bars stay hidden. Upgrade fakechat.
+- Unset `CLAUDEGRAM_STATUSLINE_URL` → feature is fully inert; Claude Code's own statusline is unaffected.
+
+---
+
+## Message UI niceties
+
+- **Markdown in Claude replies.** Assistant messages are piped through a small safe renderer (`web/js/markdown.js`) that handles fenced code blocks, inline code, bold/italic, ordered/unordered lists, ATX headings, and links. User messages are still shown as plain escaped text — we only format what Claude emits, not what you type. Link URLs are restricted to `http(s)://`, `mailto:`, and same-origin paths; `javascript:` / `data:` schemes are dropped.
+- **"Claude is thinking" indicator.** After you hit send, a three-dot typing bubble appears at the tail of the transcript until the next assistant message arrives for that session. State is ephemeral (lives in the tab) — a page refresh clears it, and delivery failures (error frame, no-fakechat) drop the bubble immediately.
+- **Assistant label.** Messages from Claude Code are now labelled `Claude` in the bubble meta row.
+
+---
+
+## Unread count now clears across refreshes
+
+Previously the PWA cleared unread counts locally on session select but never notified the server, so a page refresh re-hydrated the old count from the DB. The frontend now sends a `mark_read` WS frame on session selection (and on incoming assistant messages for the active session), advancing `last_read_at` server-side. Refreshing the page now shows the same cleared state.
 
 ---
 
