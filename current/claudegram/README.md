@@ -64,7 +64,91 @@ Reference: `docs/request_v1.md §12.6` (full event spec).
 | `message` | `{ type, session_id, message: { id, direction, ts, content, session_id, ingested_at } }` | After every successful POST /ingest |
 | `session_update` | `{ type, session: { id, name, status, last_read_at, first_seen_at, last_seen_at } }` | After every successful POST /ingest (reflects latest session state) |
 
+> **P2 note**: `session_update` frames now also carry `unread_count` (added in P2). See the P2 outbound-frames table below for the full shape.
+
 Client-to-server messages are **ignored** in P1 — the socket is receive-only.
+
+---
+
+## P2 WebSocket protocol
+
+P2 adds bidirectional relay: a separate `/session-socket` endpoint for fakechat (reverse dial), and inbound frames on `/user-socket` for PWA→fakechat communication.
+
+### `/session-socket` — fakechat reverse WebSocket
+
+fakechat dials claudegram as a WebSocket client; claudegram is the server. The connection carries forwarded PWA replies to the fakechat process.
+
+**Auth gate** (pre-upgrade): when `TRUST_CF_ACCESS=true`, the upgrade request must include both `CF-Access-Client-Id` and `CF-Access-Client-Secret` headers (non-empty). Missing or empty → HTTP 401 before upgrade. Shape check only; cryptographic verification happens at the Cloudflare Access edge in P4.
+
+**Inbound frame** (fakechat → claudegram, after connect):
+```json
+{ "type": "register", "session_id": "...", "session_name": "...(optional)" }
+```
+Registers the fakechat process as the handler for `session_id`. A second `register` frame for the same `session_id` evicts the prior connection (normal on restart).
+
+**Outbound frames** (claudegram → fakechat):
+```json
+{ "type": "reply", "text": "...", "client_msg_id": "...", "origin": "pwa" }
+```
+Forwarded when a PWA sends a `reply` frame on `/user-socket`. The `origin:'pwa'` tag lets fakechat skip the echo re-post to `/ingest` (see dedup below).
+
+**Error frames** (claudegram → fakechat):
+```json
+{ "type": "error", "reason": "invalid_payload" | "internal_error" }
+```
+
+---
+
+### `/user-socket` — inbound frames (PWA → claudegram)
+
+In addition to the P1 receive-only stream, the PWA now sends frames to claudegram:
+
+**`reply` frame** — relay a PWA message to fakechat:
+```json
+{ "type": "reply", "session_id": "...", "text": "...", "client_msg_id": "...", "reply_to": "...(optional)" }
+```
+- `client_msg_id`: correlation ID echoed in the error frame on failure; required.
+- On success: forwarded to fakechat with `origin:'pwa'`; no ack sent back.
+- On failure: error frame sent back to the PWA.
+
+**`mark_read` frame** — advance the session read pointer:
+```json
+{ "type": "mark_read", "session_id": "...", "up_to_message_id": "..." }
+```
+- Advances `last_read_at` monotonically (SQL: `MAX(COALESCE(last_read_at,0), message.ts)`).
+- Triggers a `{type:'session_update'}` broadcast to all connected PWAs.
+
+**Inbound bad-frame policy**: an error frame is sent on each malformed frame; after N consecutive bad frames (default 5, configurable via `WS_INBOUND_MAX_BAD_FRAMES`), the socket is closed with code 1003.
+
+---
+
+### `/user-socket` — outbound frames (claudegram → PWA)
+
+| Frame type | Shape | When sent |
+|---|---|---|
+| `message` | `{ type, session_id, message: { id, direction, ts, content, session_id, ingested_at } }` | After successful POST /ingest |
+| `session_update` | `{ type, session: { id, name, status, last_read_at, unread_count, first_seen_at, last_seen_at } }` | After POST /ingest or mark_read |
+| `error` | `{ type:"error", reason, session_id?, client_msg_id?, up_to_message_id? }` | On relay or mark_read failure |
+
+**Error reasons**: `session_not_connected` (no fakechat registered), `send_failed` (socket write failed or buffer full), `unknown_message` (mark_read target not found), `invalid_payload` (bad frame), `internal_error` (DB error).
+
+---
+
+### Origin-tag echo dedup
+
+When the PWA sends a `reply` frame, claudegram forwards it to fakechat tagged with `origin:'pwa'`. fakechat's `claudegram-client` checks this tag and skips the `/ingest` POST — preventing the message from being re-broadcast as a new `{type:'message'}` event. Without the tag, fakechat would echo every PWA reply back as a duplicate broadcast.
+
+---
+
+## P2 Env vars
+
+| Variable | Default | Description |
+|---|---|---|
+| `TRUST_CF_ACCESS` | `false` | When `true`, `/session-socket` upgrades require `CF-Access-Client-Id` + `CF-Access-Client-Secret` headers. Also gates `/api/me` email read. |
+| `WS_OUTBOUND_BUFFER_CAP_BYTES` | `1048576` (1 MB) | Max `bufferedAmount` before outbound frames are dropped with a `send_failed` / `buffer_full` result. |
+| `WS_INBOUND_MAX_BAD_FRAMES` | `5` | Consecutive malformed frames before the user-socket is closed with code 1003. |
+| `MAX_PWA_CONNECTIONS` | `256` | Maximum concurrent `/user-socket` connections. Requests past cap get HTTP 503 pre-upgrade. |
+| `MAX_SESSION_CONNECTIONS` | `64` | Maximum concurrent `/session-socket` registrations. Requests past cap get HTTP 503 pre-upgrade; `register` frames past cap get an `internal_error` close. |
 
 ---
 
@@ -181,7 +265,11 @@ bunx tsc --noEmit     # TypeScript type check (must exit 0)
 bun test --coverage   # coverage report
 ```
 
-Integration tests (`src/integration.test.ts`, `src/integration-api.test.ts`) boot a real in-process server on an ephemeral port (port 0) and exercise the full request path — no mocks.
+Integration tests boot a real in-process server on an ephemeral port (port 0) and exercise the full request path — no mocks:
+
+- `src/integration.test.ts` — P1 WebSocket broadcast: `/ingest` → WS fan-out, `ingested_at` timestamp, multi-client fan-out.
+- `src/integration-api.test.ts` — P1 REST API: `/api/sessions`, `/api/messages`, `/api/me`, `/health`.
+- `src/integration-p2-relay.test.ts` — P2 relay E2E: PWA reply → fakechat forward (2.6a), `mark_read` unread_count drop (2.6b), echo-dedup proof that claudegram does not broadcast unfound `/ingest` (2.6c), `session_not_connected` error frame.
 
 ---
 
