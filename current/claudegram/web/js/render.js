@@ -97,18 +97,18 @@ export function createRenderer({ store, onSelectSession, onSendReply, onDeleteSe
       li.setAttribute('aria-selected', String(isActive));
       li.classList.toggle('active', isActive);
 
+      // Connection state drives the left bar (replaces the prior status dot).
+      const connState = session.connected === true ? 'online' : session.connected === false ? 'offline' : 'unknown';
+      li.dataset.connected = connState;
+      li.title = `${session.name ?? id} — ${connState}`;
+
       const unread = session.unread_count ?? 0;
       const badge = unread > 0 ? ` <span class="unread-badge" aria-label="${unread} unread">${unread}</span>` : '';
-
-      // FIX C: status dot — replaces inline (offline) text.
-      const dotState = session.connected === true ? 'online' : session.connected === false ? 'offline' : 'unknown';
-      const dotLabel = dotState === 'online' ? 'online' : dotState === 'offline' ? 'offline' : 'unknown';
-      const statusDot = `<span class="session-status-dot" data-state="${dotState}" aria-label="${dotLabel}" role="img"></span>`;
 
       // FIX B: rename button (pencil affordance), FIX 7: delete button.
       const renameBtn = `<button class="session-rename" aria-label="Rename session" title="Rename session">✎</button>`;
       const deleteBtn = `<button class="session-delete" aria-label="Delete session" title="Delete session">×</button>`;
-      li.innerHTML = `${statusDot}<span class="session-name">${escapeHtml(session.name ?? id)}</span>${badge}${renameBtn}${deleteBtn}`;
+      li.innerHTML = `<span class="session-name">${escapeHtml(session.name ?? id)}</span><span class="sr-only"> (${connState})</span>${badge}${renameBtn}${deleteBtn}`;
 
       // Wire rename button (each render replaces innerHTML so re-attach is required).
       const renBtn = li.querySelector('.session-rename');

@@ -174,28 +174,37 @@ aside {
 
 #session-list li {
   position: relative;
-  padding: 0.65rem 0.85rem;
+  padding: 0.65rem 0.85rem 0.65rem 0.95rem;
   cursor: pointer;
   border-radius: var(--radius);
   margin: 0.15rem 0;
   font-size: 0.875rem;
   color: var(--ink-dim);
-  border-left: 3px solid transparent;
+  /* Left bar — connection-state indicator (online/offline/unknown).
+     Always 5px; color set by [data-connected] below. Hover/selected
+     never overwrite this so the live state stays visible. */
+  border-left: 5px solid var(--surface3);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  transition: background 0.12s, border-color 0.12s, color 0.12s;
+  transition: background 0.12s, color 0.12s, border-left-color 0.18s;
 }
+#session-list li[data-connected="online"]   { border-left-color: var(--ink); }
+#session-list li[data-connected="offline"]  { border-left-color: var(--accent); }
+#session-list li[data-connected="unknown"]  { border-left-color: var(--surface3); }
+
 #session-list li:hover {
   background: var(--surface2);
   color: var(--ink);
-  border-left-color: var(--sunshine);
 }
 #session-list li[aria-selected="true"] {
   background: var(--ink);
   color: var(--bg);
-  border-left-color: var(--accent);
 }
+/* When the row is selected (dark Mistral Black bg), the online bar would
+   visually disappear — bump it to Bright Yellow for contrast. Offline/unknown
+   bar colors already pop against the dark bg so they're left as-is. */
+#session-list li[aria-selected="true"][data-connected="online"] { border-left-color: var(--yellow); }
 #session-list li[aria-selected="true"] .session-name { color: #fff; }
 #session-list li[aria-selected="true"] .unread-badge { color: var(--surface2); }
 
@@ -211,26 +220,8 @@ aside {
   margin-left: 0.4ch;
 }
 
-/* Sidebar: status dot, rename + delete affordances */
-
-/* Per-session status dot (FIX C) */
-.session-status-dot {
-  display: inline-block;
-  width: 9px; height: 9px;
-  border-radius: 50%;
-  border: 1px solid var(--ink);
-  flex-shrink: 0;
-  margin-right: 0.5ch;
-  vertical-align: middle;
-  position: relative; top: -1px;
-}
-.session-status-dot[data-state="online"]  { background: var(--ink); }
-.session-status-dot[data-state="offline"] { background: var(--accent); }
-.session-status-dot[data-state="unknown"] { background: var(--surface3); }
-#session-list li[aria-selected="true"] .session-status-dot { border-color: var(--surface2); }
-#session-list li[aria-selected="true"] .session-status-dot[data-state="online"]  { background: var(--yellow); }
-#session-list li[aria-selected="true"] .session-status-dot[data-state="offline"] { background: var(--accent); }
-#session-list li[aria-selected="true"] .session-status-dot[data-state="unknown"] { background: var(--surface3); }
+/* Sidebar: rename + delete affordances. The connection-state indicator
+   lives on the row's left border (see #session-list li above). */
 
 /* Rename button (FIX B) */
 .session-rename {

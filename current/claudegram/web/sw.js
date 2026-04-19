@@ -1,4 +1,4 @@
-const VERSION = 'v1-mistral-rename-status';
+const VERSION = 'v1-mistral-status-bar';
 const SHELL = [
   '/',
   '/web/style.css',
