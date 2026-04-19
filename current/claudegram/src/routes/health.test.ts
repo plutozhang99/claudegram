@@ -57,6 +57,7 @@ beforeEach(() => {
       db_path: './data/claudegram.db',
       log_level: 'info',
       trustCfAccess: false,
+      wsOutboundBufferCapBytes: 1_048_576,
     },
     webRoot: '/tmp/__claudegram_test_nonexistent_web__',
   };

@@ -1,6 +1,11 @@
 import type { ServerWebSocket } from 'bun';
 import type { Message, Session } from '../repo/types.js';
 
+/** Discriminant data placed in the `ws.data` slot at /user-socket upgrade time. */
+export interface UserSocketData {
+  readonly kind: 'user-socket';
+}
+
 export type BroadcastPayload =
   | { readonly type: 'message'; readonly session_id: string; readonly message: Message }
   | { readonly type: 'session_update'; readonly session: Session };

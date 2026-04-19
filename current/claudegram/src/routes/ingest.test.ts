@@ -80,6 +80,7 @@ describe('POST /ingest', () => {
         db_path: ':memory:',
         log_level: 'info',
         trustCfAccess: false,
+        wsOutboundBufferCapBytes: 1_048_576,
       },
       webRoot: '/tmp/__claudegram_test_nonexistent_web__',
     };
@@ -300,6 +301,7 @@ describe('POST /ingest', () => {
         db_path: ':memory:',
         log_level: 'info',
         trustCfAccess: false,
+        wsOutboundBufferCapBytes: 1_048_576,
       },
       webRoot: '/tmp/__claudegram_test_nonexistent_web__',
     };
@@ -413,6 +415,7 @@ describe('POST /ingest', () => {
         db_path: ':memory:',
         log_level: 'info',
         trustCfAccess: false,
+        wsOutboundBufferCapBytes: 1_048_576,
       },
       webRoot: '/tmp/__claudegram_test_nonexistent_web__',
     };

@@ -6,13 +6,14 @@ import type { RunningServer } from './server.js';
 import { InMemoryHub } from './ws/hub.js';
 import type { Config } from './config.js';
 import { createLogger } from './logger.js';
+import { InMemorySessionRegistry } from './ws/session-registry.js';
 
 // Use a port range that avoids collision with common services.
 const BASE_PORT = 38000 + (process.pid % 1000);
 
 function makeConfig(port: number): Config {
   // Bypass Zod to allow port=0-style ephemeral. Tests use explicit high ports.
-  return { port, db_path: ':memory:', log_level: 'error', trustCfAccess: false };
+  return { port, db_path: ':memory:', log_level: 'error', trustCfAccess: false, wsOutboundBufferCapBytes: 1_048_576 };
 }
 
 const logger = createLogger({ level: 'error' });
@@ -129,6 +130,45 @@ describe('WebSocket /user-socket', () => {
     });
     // Should be a 404 (no upgrade header, falls through to dispatch)
     expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(hub.size).toBe(0);
+  });
+});
+
+// ── HIGH 1 cross-route routing isolation test ─────────────────────────────────
+
+describe('WebSocket routing isolation', () => {
+  it('/user-socket inbound register frame does NOT trigger session-socket handler (no upsert)', async () => {
+    const hub = new InMemoryHub();
+    const sessionRegistry = new InMemorySessionRegistry();
+    server = createServer({ config: makeConfig(nextPort()), db, logger, hub, sessionRegistry });
+
+    // Connect via /user-socket (NOT /session-socket)
+    const ws = new WebSocket(`ws://localhost:${server.port}/user-socket`);
+    await new Promise<void>((resolve, reject) => {
+      ws.onopen = () => resolve();
+      ws.onerror = () => reject(new Error('ws error'));
+      setTimeout(() => reject(new Error('ws open timeout')), 3000);
+    });
+
+    // Give the open handler time to run
+    await new Promise<void>((r) => setTimeout(r, 20));
+
+    // Send a {type:'register'} frame — this would trigger session-socket handler
+    // if routing was incorrectly merged. The session registry should remain empty.
+    ws.send(JSON.stringify({ type: 'register', session_id: 'fake-session-via-user-socket' }));
+
+    // Allow message processing time
+    await new Promise<void>((r) => setTimeout(r, 50));
+
+    // The session registry must NOT have any registered sessions — the
+    // user-socket path must NOT route to the session-socket message handler.
+    expect(sessionRegistry.size).toBe(0);
+
+    // Hub should have the user-socket connected
+    expect(hub.size).toBe(1);
+
+    ws.close();
+    await new Promise<void>((r) => setTimeout(r, 50));
     expect(hub.size).toBe(0);
   });
 });

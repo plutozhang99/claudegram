@@ -159,3 +159,29 @@ describe("configSchema export", () => {
     expect(result.success).toBe(true);
   });
 });
+
+describe("WS_OUTBOUND_BUFFER_CAP_BYTES", () => {
+  it("accepts a valid numeric string", () => {
+    const config = loadConfig({ WS_OUTBOUND_BUFFER_CAP_BYTES: "2097152" });
+    expect(config.wsOutboundBufferCapBytes).toBe(2_097_152);
+  });
+
+  it("malformed value 'abc' → throws Error mentioning WS_OUTBOUND_BUFFER_CAP_BYTES", () => {
+    let caught: unknown;
+    try {
+      loadConfig({ WS_OUTBOUND_BUFFER_CAP_BYTES: "abc" });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect(String(caught)).toContain("WS_OUTBOUND_BUFFER_CAP_BYTES");
+  });
+
+  it("value '0' → throws (not positive)", () => {
+    expect(() => loadConfig({ WS_OUTBOUND_BUFFER_CAP_BYTES: "0" })).toThrow();
+  });
+
+  it("negative value '-1' → throws (not positive)", () => {
+    expect(() => loadConfig({ WS_OUTBOUND_BUFFER_CAP_BYTES: "-1" })).toThrow();
+  });
+});

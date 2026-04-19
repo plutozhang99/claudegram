@@ -8,6 +8,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     db_path: './data/claudegram.db',
     log_level: 'info',
     trustCfAccess: false,
+    wsOutboundBufferCapBytes: 1_048_576,
     ...overrides,
   };
 }

@@ -18,7 +18,7 @@ import type { Config } from './config.js';
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 function makeConfig(): Config {
-  return { port: 0 as unknown as number, db_path: ':memory:', log_level: 'error', trustCfAccess: false };
+  return { port: 0 as unknown as number, db_path: ':memory:', log_level: 'error', trustCfAccess: false, wsOutboundBufferCapBytes: 1_048_576 };
 }
 
 const logger = createLogger({ level: 'error', stream: { write: () => {} } });

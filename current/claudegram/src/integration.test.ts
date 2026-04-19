@@ -16,7 +16,7 @@ import type { Config } from './config.js';
 
 function makeConfig(): Config {
   // Cast to bypass Zod's port 1-65535 constraint — Bun accepts 0 for ephemeral.
-  return { port: 0 as unknown as number, db_path: ':memory:', log_level: 'error', trustCfAccess: false };
+  return { port: 0 as unknown as number, db_path: ':memory:', log_level: 'error', trustCfAccess: false, wsOutboundBufferCapBytes: 1_048_576 };
 }
 
 const logger = createLogger({ level: 'error', stream: { write: () => {} } });
