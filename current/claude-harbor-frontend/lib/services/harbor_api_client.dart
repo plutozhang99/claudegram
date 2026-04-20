@@ -221,6 +221,38 @@ class HarborApiClient {
     }
   }
 
+  /// GET /admin/session/:sessionId — returns the per-session `channel_token`.
+  ///
+  /// Loopback admin endpoints work without a token; pass [adminToken] as
+  /// `x-harbor-admin-token` header when the server binds to non-loopback.
+  /// Throws [HarborApiException] on non-2xx responses (401 → admin token
+  /// required / rotated).
+  Future<String> adminFetchChannelToken(
+    String sessionId, {
+    String? adminToken,
+  }) async {
+    final uri = _resolve('/admin/session/${Uri.encodeComponent(sessionId)}');
+    final headers = <String, String>{
+      if (adminToken != null && adminToken.isNotEmpty)
+        'x-harbor-admin-token': adminToken,
+    };
+    final res =
+        await _http.get(uri, headers: headers).timeout(timeout);
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw HarborApiException(res.statusCode, res.body);
+    }
+    final data = _decodeObject(res.body);
+    final sessionRaw = data['session'];
+    if (sessionRaw is! Map<String, dynamic>) {
+      throw const HarborApiException(500, 'admin session field not an object');
+    }
+    final token = sessionRaw['channel_token'];
+    if (token is! String || token.isEmpty) {
+      throw const HarborApiException(500, 'channel_token missing');
+    }
+    return token;
+  }
+
   /// Release the underlying http.Client (only if we own it).
   void close() {
     if (_ownsClient) _http.close();

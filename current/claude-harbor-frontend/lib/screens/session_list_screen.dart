@@ -5,7 +5,7 @@ import '../models/session.dart';
 import '../providers/harbor_providers.dart';
 import '../theme/mistral_theme.dart';
 import '../widgets/section_label.dart';
-import 'session_detail_placeholder.dart';
+import 'session_detail_screen.dart';
 import 'sessions/session_tile.dart';
 import 'sessions/skeleton_tile.dart';
 
@@ -15,7 +15,7 @@ const double _maxContentWidth = 960;
 
 Route<void> _sessionDetailRoute(String sessionId) {
   return MaterialPageRoute<void>(
-    builder: (_) => SessionDetailPlaceholder(sessionId: sessionId),
+    builder: (_) => SessionDetailScreen(sessionId: sessionId),
   );
 }
 

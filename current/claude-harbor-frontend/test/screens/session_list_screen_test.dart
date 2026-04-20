@@ -1,8 +1,9 @@
 import 'dart:async';
 
+import 'package:claude_harbor_frontend/models/message.dart';
 import 'package:claude_harbor_frontend/models/session.dart';
 import 'package:claude_harbor_frontend/providers/harbor_providers.dart';
-import 'package:claude_harbor_frontend/screens/session_detail_placeholder.dart';
+import 'package:claude_harbor_frontend/screens/session_detail_screen.dart';
 import 'package:claude_harbor_frontend/screens/session_list_screen.dart';
 import 'package:claude_harbor_frontend/screens/sessions/skeleton_tile.dart';
 import 'package:claude_harbor_frontend/screens/sessions/session_tile.dart';
@@ -130,19 +131,33 @@ void main() {
     expect(find.textContaining('30%'), findsOneWidget);
   });
 
-  testWidgets('tap tile pushes SessionDetailPlaceholder', (tester) async {
+  testWidgets('tap tile pushes SessionDetailScreen', (tester) async {
     final Session s = _mk(
       sessionId: 'uniqueid99',
       projectDir: '/work/demo',
     );
-    await tester.pumpWidget(_hostTheme(
-      streamBuilder: () => Stream<List<Session>>.value(<Session>[s]),
-    ));
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: <Override>[
+          sessionListProvider.overrideWith(
+            (ref) => Stream<List<Session>>.value(<Session>[s]),
+          ),
+          sessionDetailProvider.overrideWith((ref, id) async => s),
+          messagesProvider.overrideWith(
+            (ref, id) => Stream<List<Message>>.value(const <Message>[]),
+          ),
+        ],
+        child: MaterialApp(
+          theme: mistralLightTheme,
+          home: const SessionListScreen(),
+        ),
+      ),
+    );
     await tester.pump();
     await tester.tap(find.byType(SessionTile));
     await tester.pumpAndSettle();
-    expect(find.byType(SessionDetailPlaceholder), findsOneWidget);
-    expect(find.text('uniqueid99'), findsOneWidget);
-    expect(find.textContaining('P2.4'), findsOneWidget);
+    expect(find.byType(SessionDetailScreen), findsOneWidget);
+    // AppBar title contains the short session-id suffix — uppercased by SectionLabel.
+    expect(find.textContaining('UNIQUEID'), findsOneWidget);
   });
 }

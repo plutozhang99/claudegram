@@ -31,7 +31,7 @@ YES — `docs/DESIGN.md` (Mistral warm palette). All UI work in P2 MUST follow i
 ## Current Phase: P2 — Flutter frontend scaffold
 
 ## Interruption Reason
-rate-limit — P2.3 implementation complete on disk (68/68 tests pass, `flutter analyze` clean) but **not committed**. Both parallel reviewers (flutter + functional-coverage) hit their quota before producing output (resets 2pm America/Toronto 2026-04-20). On resume: re-dispatch the two P2.3 reviewers, run fix pass on any blockers, then commit. Code is uncommitted on `main` — run `git status` to confirm untracked files before touching anything.
+<!-- empty -->
 
 
 ## Review Roster (fixed at kickoff)
@@ -100,6 +100,13 @@ rate-limit — P2.3 implementation complete on disk (68/68 tests pass, `flutter 
 - Update README with P2 dev workflow.
 
 ## What's Done
+- [x] **P2.3** Session list screen — commit `73b4430` — flutter ✅ func ✅
+  - `SessionListScreen` (ConsumerWidget) with loading (SkeletonList), error (RETRY invalidates + awaits `.future`), empty ("NO ACTIVE SESSIONS" + Courier command hint), data (RefreshIndicator + ListView.separated). Responsive 16/32/64 padding, max-width 960. AppBar "HARBOR".
+  - `SessionTile` (StatelessWidget): project basename (`path.basename` w/ em-dash fallback on empty sessionId), model display, 12×12 zero-radius status dot (active/idle/ended/unbound palette) w/ Tooltip + Semantics for non-color indicator, context bar (kCream track + kMistralOrange fill, clamped 0..100), 5h/7d row from `session.rateLimits`, Courier cost (shows $0.00, hides on null). InkWell w/ `overlayColor` WidgetStateProperty (kCream hover/pressed/focused) and `customBorder` zero-radius so ink clips sharp. `ConstrainedBox minHeight: 72` for ≥48dp tap target. `Semantics(button: true)` + `MergeSemantics` content.
+  - `SessionDetailPlaceholder` bridge until P2.4.
+  - `SectionLabel` promoted to `lib/widgets/`; showcase keeps re-export.
+  - Renamed `_skeleton_tile.dart` → `skeleton_tile.dart` (public API filename convention).
+  - 71 tests pass (3 new: cost-zero, 5h/7d hidden, 5h/7d rendered). `flutter analyze` clean. No cool colors / bold weights / rounded corners; DESIGN.md compliance verified by reviewer grep.
 - [x] **P2.2** Flutter data layer — commit `aa0c95d` — flutter ✅ sec ✅ func ✅
   - Immutable models (`Session`, `Message`, `Statusline`, `RateLimits`/`RateWindow`) with strict `fromJson` on required fields + defensive coercion on optional.
   - `HarborApiClient` (listSessions / getSession+counts / listMessages pagination / postChannelReply) with structured `Uri.replace`, 10 s timeout, `HarborApiException` truncating body.
@@ -123,9 +130,7 @@ rate-limit — P2.3 implementation complete on disk (68/68 tests pass, `flutter 
   - Tests: 139 pass / 0 fail, tsc clean. Round-1 security BLOCK on C1 (channel_token leak) closed in round-2.
 
 ## Next Steps
-- [~] **P2.3 IMPL DONE, REVIEWS BLOCKED** — 68/68 tests pass, `flutter analyze` clean, uncommitted. Files on disk: `lib/screens/session_list_screen.dart` (216), `lib/screens/session_detail_placeholder.dart` (35), `lib/screens/sessions/session_tile.dart` (232), `lib/screens/sessions/_skeleton_tile.dart` (51), `lib/widgets/section_label.dart` (26, promoted), `lib/screens/showcase/section_label.dart` (3, re-export shim), `test/screens/session_list_screen_test.dart` (144), `test/screens/session_tile_test.dart` (135). `lib/main.dart` switched `home:` to `SessionListScreen`. `pubspec.yaml` added `path: ^1.9.0`.
-- [ ] **P2.3 REVIEWS** — re-dispatch flutter-reviewer + functional-coverage after 2pm Toronto quota reset. Any blockers → fix pass. Then commit with haiku.
-- [ ] **P2.4** Session detail screen
+- [ ] **P2.4** Session detail screen (two-pane responsive chat + metadata)
 - [ ] **P2.5** Build integration + smoke test
 - [ ] **P2.2** Data layer (models, REST, WS subscribe)
 - [ ] **P2.3** Session list screen

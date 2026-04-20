@@ -93,8 +93,42 @@ final FutureProviderFamily<Session, String> sessionDetailProvider =
 });
 
 /// Live stream of new inbound/outbound messages for a specific session.
+///
+/// Emits one [Message] per `MessageCreated` event. Useful for narrow
+/// listeners (e.g. a "new message" badge). For the chat pane use
+/// [messagesProvider], which gives the full chronologically-sorted list.
 final StreamProviderFamily<Message, String> messageInboxProvider =
     StreamProvider.family<Message, String>((ref, sessionId) {
   final repo = ref.watch(messageRepositoryProvider);
   return repo.watchInbox(sessionId);
+});
+
+/// Chronological list of messages for a session — REST backfill + live
+/// appends merged into one sorted, deduped list. Intended for the P2.4
+/// detail chat pane. `autoDispose` + explicit `disposeSession` in
+/// onDispose means the repo-side feed cache is released when nothing
+/// is listening, so live subscriptions and stream controllers don't leak.
+final AutoDisposeStreamProviderFamily<List<Message>, String> messagesProvider =
+    StreamProvider.autoDispose.family<List<Message>, String>((ref, sessionId) {
+  final repo = ref.watch(messageRepositoryProvider);
+  ref.onDispose(() {
+    unawaited(repo.disposeSession(sessionId));
+  });
+  return repo.watchMessages(sessionId);
+});
+
+/// Optional admin token used to authenticate against `/admin/*` endpoints
+/// (e.g. fetching the per-session `channel_token` for the compose box).
+///
+/// Read once at startup from `--dart-define=HARBOR_ADMIN_TOKEN=...`.
+/// Returns `null` when the compile-time value is empty — loopback admin
+/// calls work without a token, so an unset value is valid in dev.
+///
+/// NOTE: This value is compile-time embedded in the JS bundle shipped to
+/// the browser. Only safe for loopback / single-operator deployments —
+/// do not use this mechanism for a multi-tenant or public-facing harbor.
+final Provider<String?> harborAdminTokenProvider = Provider<String?>((ref) {
+  const String value = String.fromEnvironment('HARBOR_ADMIN_TOKEN');
+  if (value.isEmpty) return null;
+  return value;
 });

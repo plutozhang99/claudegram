@@ -57,6 +57,13 @@ class _FakeApi implements HarborApiClient {
   }) async {}
 
   @override
+  Future<String> adminFetchChannelToken(
+    String sessionId, {
+    String? adminToken,
+  }) async =>
+      throw UnimplementedError();
+
+  @override
   void close() {}
 }
 
