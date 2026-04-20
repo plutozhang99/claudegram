@@ -49,9 +49,9 @@ YES — `docs/DESIGN.md`. All UI changes must follow the Mistral warm palette (i
 - [x] Remote set to `git@github.com-self:plutozhang99/claude-harbor.git`
 - [x] **P0.1** Remote Bun server — HTTP `/hooks/session-start`, `/statusline`, `/admin/push-message`, WS `/channel`, SQLite. 19 tests pass, tsc clean. Reviews: code ✅ sec ✅ func ✅ (P1 hardening flagged: auth+TLS per spec scope)
 - [x] **P0.2** Stdio MCP proxy (`current/claude-harbor/proxy/`) — MCP handshake, WS handshake + bound ack, inbound forwarding to `notifications/claude/channel`, outbound `reply` tool -> `POST /channel/reply`. Server-side adds: `POST /channel/reply` endpoint, `insertMessage` on Db, `channel_token` in bound-ack frame. Reviews: code ✅ sec ✅ func ✅. Final: 29 server tests, 30 proxy tests, tsc clean. Hardening: inbound content/meta caps + control-char strip, token redaction in logs, constant-time token compare, HARBOR_URL scheme allowlist, stdin line cap (1 MiB), reconnect rate cap. Follow-up: `correlate.ts:78` still logs 8-char token prefix on ws-bind-refused — P1 cleanup.
+- [x] **P0.3** CLI wrapper (`current/claude-harbor/wrapper/`) — `claude-harbor start [args]` exec's real `claude --channels plugin:claude-harbor@local [args]`. `CLAUDE_BIN` + PATH discovery (realpath canonicalization, relative-PATH entries rejected). SIGINT/SIGTERM/SIGHUP forwarding with pre-spawn handler registration. `HARBOR_CHANNEL_SPEC` override regex-validated. Reviews: code ✅ sec ✅ func ✅. 21 wrapper + 29 server + 30 proxy tests, all tsc clean.
 
 ## Next Steps
-- [ ] P0.3: `claude-harbor` CLI wrapper — `claude-harbor start [args]` → exec claude with channels
 - [ ] P0.4: Install script — writes `~/.claude/settings.json` hooks + statusline + channel plugin; idempotent; includes uninstall
 
 ## Notes / Gotchas
@@ -63,9 +63,9 @@ YES — `docs/DESIGN.md`. All UI changes must follow the Mistral warm palette (i
 - **DESIGN.md is authoritative for UI** — Mistral warm palette, no cool colors, weight 400 only, sharp corners.
 
 ## Next Agent Prompt
-Kick off P0.3 — claude-harbor CLI wrapper.
+Kick off P0.4 — install/uninstall script.
 
-> You are implementing Phase P0.3 of claude-harbor. Build a small Bun single-file CLI at `current/claude-harbor/wrapper/` that exposes a `claude-harbor` binary. Command: `claude-harbor start [...args]` — exec the real `claude` binary with the channels plugin activated. Need to: discover the user's `claude` executable via PATH (or `CLAUDE_BIN` env override), pass through all args verbatim, and ensure the channels plugin `claude-harbor-ch` (from `current/claude-harbor/proxy/`) is wired via `claude --channels=plugin:claude-harbor@local` flag (confirm exact flag name via CHANNELS-REFERENCE.md). Also support `claude-harbor --version` and `claude-harbor --help`. Do NOT modify `~/.claude/` from runtime — that's P0.4's install script's job. Tests: version, help, arg passthrough (spawn `echo` as fake `claude`), missing-claude error handling. Keep files <400 lines. No install script, no frontend yet.
+> You are implementing Phase P0.4 of claude-harbor. Build a Bun CLI at `current/claude-harbor/installer/` with two commands: `install` and `uninstall`. Read PLAN §§3, 7 and all of CHANNELS-REFERENCE.md for the exact `~/.claude/settings.json` hook/statusline/channels shapes. On install: (1) write hook entries (SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop, SessionEnd, Notification) pointing at a `claude-harbor-hook` binary (which you will also create — a tiny Bun script that POSTs stdin JSON to `${HARBOR_URL}/hooks/<event>`), (2) wire statusline to a `claude-harbor-statusline` binary (POSTs stdin, echoes returned line), (3) register the channel plugin `claude-harbor@local` per CHANNELS-REFERENCE §8 with `allowedChannelPlugins`. All writes must be idempotent (diff-and-merge, not clobber). Include `--dry-run`. Uninstall reverses exactly what install added. Backup the existing settings.json to settings.json.bak before first write. Keep all files <400 lines. Tests: install against a tmp $CLAUDE_HOME asserts idempotency, uninstall leaves file byte-identical to pre-install. No frontend, no hook/statusline POST bodies beyond pass-through.
 
 ## Orchestrator Rules (for future sessions)
 On restart, still follow:

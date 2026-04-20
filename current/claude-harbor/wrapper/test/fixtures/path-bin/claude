@@ -1,0 +1,11 @@
+#!/bin/bash
+# PATH-resolution test fixture. Identical in spirit to fake-claude.sh but
+# deliberately uses a direct /bin/bash shebang (not /usr/bin/env bash) so
+# that the test can set PATH to ONLY this fixture dir without breaking
+# script startup. Linux and macOS both ship /bin/bash.
+# discovered via PATH lookup rather than CLAUDE_BIN. Prints each argv on
+# its own line, prefixed with "ARG:", then exits 0.
+for a in "$@"; do
+  printf 'ARG:%s\n' "$a"
+done
+exit "${FAKE_EXIT:-0}"
