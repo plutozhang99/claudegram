@@ -121,7 +121,8 @@ cd current/claude-harbor-frontend && flutter analyze && flutter test
 - P4 — mobile builds (iOS + Android via Flutter).
 - P5 — multi-user / multi-project (future).
 
-See [`docs/progress/PROGRESS.md`](./docs/progress/PROGRESS.md) for the
-live task breakdown and
+Completed phases are archived under
+[`docs/archive/`](./docs/archive/). `docs/progress/PROGRESS.md` is
+created fresh when a new phase starts. See
 [`docs/plans/PLAN-claude-harbor.md`](./docs/plans/PLAN-claude-harbor.md)
 for phase plans.
