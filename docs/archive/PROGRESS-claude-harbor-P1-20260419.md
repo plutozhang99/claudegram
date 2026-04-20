@@ -62,9 +62,10 @@ YES — `docs/DESIGN.md`. All UI changes must follow the Mistral warm palette. (
 - [x] **P1.1** 6 hook endpoints (`/hooks/{user-prompt-submit,pre-tool-use,post-tool-use,stop,session-end,notification}`) + payload persistence (messages inbound, tool_events). New modules: `src/http-hooks.ts` (288), `test/server.p1-hooks.test.ts` (610). Db methods: `insertToolEvent`, `markSessionEnded(reason?)`. **Hardening applied:** streaming 64 KiB body cap via `getReader()` + `reader.cancel()`; FK `ON DELETE CASCADE` on messages + tool_events with `PRAGMA foreign_keys=ON`; `safeStringify` wraps all raw-JSON persistence; control-char strip widened to C1 range and applied to `tool_name`, `permission_mode`, `cwd`, `transcript_path` logs; default bind `127.0.0.1`; PLAN §12 Security added; deterministic test pids; warn-once on legacy field fallbacks. Reviews: code ✅ sec ✅ func ✅ (HIGH fixes verified). 72 tests pass, tsc clean.
 - [x] **P1.2** SUBSUMED into P1.1 — `handleSessionEnd` sets `status='ended'`, `ended_at`, `ended_reason` via `markSessionEnded`. Optional idle→ended timer intentionally deferred (env-gated design, off by default).
 
+- [x] **P1.3** account_hint install flow. Server: `install_meta` singleton table (CHECK id=1), `Db.setAccountHint/getAccountHint`, `POST /admin/account-hint` (reuses `checkAdminAuth` gate; 512-char cap + control-char strip + null clear), `createSession` copies hint from `install_meta` at insert time (immutable per session). Installer: `--account-hint auto|skip|manual:<value>` flag, `claude auth status --json` best-effort spawn with 3s timeout, 2s POST timeout, full best-effort delivery (ENOENT/timeout/nonzero/bad-JSON/no-field/POST-failure all survived), uninstall clears. **Hardening:** stdout read concurrent with proc.exited (deadlock fix), `stderr: ignore`, explicit catch logging (no bare `catch {}`), `redactHint` control-char strip on 3-char head window (prevents log injection), POST error reason captured + sanitized + truncated. Reviews: code ✅ sec ✅ func ✅. 90 server + 55 installer tests pass, tsc clean.
+
 ## Next Steps
-- [ ] P1.3 — account_hint install flow
-- [ ] P1.4 — consolidated review + commit
+- **P1 complete.** Archiving PROGRESS. P2 (Flutter frontend scaffold) starts fresh when user kicks it off.
 
 ## Notes / Gotchas
 - **Hook payload shapes vary** — see `docs/CHANNELS-REFERENCE.md` for CC-provided fields per event. Persist raw payload JSON plus a few extracted columns; don't over-normalize.
