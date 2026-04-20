@@ -94,7 +94,7 @@ class HarborApiClient {
     Map<String, String> queryParameters = const <String, String>{},
   }) {
     final base = baseUri;
-    final basePath = base.path.endsWith('/') && base.path.length > 1
+    final basePath = base.path.endsWith('/')
         ? base.path.substring(0, base.path.length - 1)
         : base.path;
     return base.replace(
