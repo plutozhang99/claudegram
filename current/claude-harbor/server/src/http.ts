@@ -3,81 +3,28 @@
  * Every endpoint validates input and returns a typed JSON envelope.
  */
 
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { timingSafeEqual } from "node:crypto";
 import type { Server } from "bun";
 import type { Db, StatuslineSnapshot } from "./db.ts";
 import { registerPending, pushToSession, type WsData } from "./correlate.ts";
 import { log, loadConfig } from "./config.ts";
+import {
+  MAX_BODY_BYTES,
+  asNumber,
+  asString,
+  err,
+  freshToken,
+  isTooLarge,
+  jsonResponse,
+  readJson,
+  shortId,
+} from "./http-utils.ts";
+import { handleChannelReply } from "./http-reply.ts";
 
-interface JsonErr {
-  ok: false;
-  error: string;
-}
+export { MAX_BODY_BYTES };
 
-/** Max body size for any JSON POST (applies to hooks + statusline + admin). */
-export const MAX_BODY_BYTES = 65_536;
 /** Max size of stringified limits JSON persisted per session row. */
 const MAX_LIMITS_BYTES = 8_192;
-
-function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
-}
-
-function err(status: number, message: string): Response {
-  const body: JsonErr = { ok: false, error: message };
-  return jsonResponse(body, status);
-}
-
-/**
- * Read + JSON-parse a request body with a strict size cap. Returns
- * `{ tooLarge: true }` if the payload exceeds the cap, `null` on parse
- * failure, or the parsed value on success.
- */
-async function readJson(
-  req: Request,
-): Promise<unknown | null | { __tooLarge: true }> {
-  const cl = req.headers.get("content-length");
-  if (cl) {
-    const n = Number.parseInt(cl, 10);
-    if (Number.isFinite(n) && n > MAX_BODY_BYTES) {
-      return { __tooLarge: true };
-    }
-  }
-  try {
-    const text = await req.text();
-    if (text.length > MAX_BODY_BYTES) return { __tooLarge: true };
-    if (!text) return null;
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
-}
-
-function isTooLarge(v: unknown): v is { __tooLarge: true } {
-  return (
-    typeof v === "object" &&
-    v !== null &&
-    (v as Record<string, unknown>).__tooLarge === true
-  );
-}
-
-function asString(v: unknown): string | null {
-  return typeof v === "string" && v.length > 0 ? v : null;
-}
-function asNumber(v: unknown): number | null {
-  return typeof v === "number" && Number.isFinite(v) ? v : null;
-}
-
-function freshToken(): string {
-  return randomBytes(24).toString("base64url");
-}
-
-function shortId(id: string): string {
-  return id.length <= 8 ? id : `${id.slice(0, 8)}…`;
-}
 
 // --- /hooks/session-start -----------------------------------------------
 
@@ -320,6 +267,9 @@ export async function handleHttp(
   }
   if (method === "POST" && path === "/statusline") {
     return handleStatusline(req, db);
+  }
+  if (method === "POST" && path === "/channel/reply") {
+    return handleChannelReply(req, db);
   }
   if (method === "POST" && path === "/admin/push-message") {
     return handleAdminPush(req, db, server);

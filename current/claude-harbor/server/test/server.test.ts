@@ -196,9 +196,15 @@ describe("WS /channel correlation", () => {
     await waitOpen(ws);
     ws.send(JSON.stringify({ parent_pid: pid, cwd, ts: Date.now() }));
     const msg = await waitMessage(ws);
-    const parsed = JSON.parse(msg) as { type: string; session_id: string };
+    const parsed = JSON.parse(msg) as {
+      type: string;
+      session_id: string;
+      channel_token: string;
+    };
     expect(parsed.type).toBe("bound");
     expect(parsed.session_id).toBe("sess-ws-ok");
+    expect(typeof parsed.channel_token).toBe("string");
+    expect(parsed.channel_token.length).toBeGreaterThan(8);
     ws.close();
   });
 
@@ -258,5 +264,48 @@ describe("POST /admin/push-message", () => {
     });
     const body = (await res.json()) as { delivered: boolean };
     expect(body.delivered).toBe(false);
+  });
+});
+
+describe("POST /channel/reply", () => {
+  test("valid channel_token inserts an outbound messages row", async () => {
+    const start = (await (
+      await postJson("/hooks/session-start", {
+        session_id: "sess-reply",
+        cwd: "/tmp/reply",
+        pid: 1,
+        ts: Date.now(),
+      })
+    ).json()) as { channel_token: string };
+    const token = start.channel_token;
+
+    const res = await postJson("/channel/reply", {
+      channel_token: token,
+      content: "hello from claude",
+      meta: { kind: "reply" },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; id: number };
+    expect(body.ok).toBe(true);
+    expect(typeof body.id).toBe("number");
+
+    // Admin route is loopback-gated; fetch the session & verify message row.
+    const rows = await fetch(`${baseUrl()}/admin/session/sess-reply`);
+    expect(rows.status).toBe(200);
+  });
+
+  test("unknown channel_token returns 401", async () => {
+    const res = await postJson("/channel/reply", {
+      channel_token: "does-not-exist",
+      content: "x",
+    });
+    expect(res.status).toBe(401);
+  });
+
+  test("missing fields return 400", async () => {
+    const res = await postJson("/channel/reply", {
+      content: "no token",
+    });
+    expect(res.status).toBe(400);
   });
 });

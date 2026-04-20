@@ -103,6 +103,7 @@ export function buildWsHandler(db: Db): WebSocketHandler<WsData> {
           JSON.stringify({
             type: "bound",
             session_id: match.session_id,
+            channel_token: match.channel_token,
           }),
         );
       } catch (err) {

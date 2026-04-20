@@ -207,4 +207,31 @@ export class Db {
       .prepare("UPDATE sessions SET status = ? WHERE session_id = ?")
       .run(status, session_id);
   }
+
+  /**
+   * Insert a message row (inbound or outbound). Returns the new row id.
+   * `meta` is serialized to JSON (empty object when undefined).
+   */
+  insertMessage(input: {
+    session_id: string;
+    direction: "inbound" | "outbound";
+    content: string;
+    meta?: Record<string, string>;
+    created_at: number;
+  }): number {
+    const metaJson = input.meta ? JSON.stringify(input.meta) : null;
+    const result = this.raw
+      .prepare(
+        `INSERT INTO messages (session_id, direction, content, meta_json, created_at)
+         VALUES ($sid, $dir, $content, $meta, $ts)`,
+      )
+      .run({
+        $sid: input.session_id,
+        $dir: input.direction,
+        $content: input.content,
+        $meta: metaJson,
+        $ts: input.created_at,
+      });
+    return Number(result.lastInsertRowid);
+  }
 }

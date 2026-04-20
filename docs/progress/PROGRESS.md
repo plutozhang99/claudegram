@@ -48,9 +48,9 @@ YES — `docs/DESIGN.md`. All UI changes must follow the Mistral warm palette (i
 - [x] PROGRESS.md rewritten
 - [x] Remote set to `git@github.com-self:plutozhang99/claude-harbor.git`
 - [x] **P0.1** Remote Bun server — HTTP `/hooks/session-start`, `/statusline`, `/admin/push-message`, WS `/channel`, SQLite. 19 tests pass, tsc clean. Reviews: code ✅ sec ✅ func ✅ (P1 hardening flagged: auth+TLS per spec scope)
+- [x] **P0.2** Stdio MCP proxy (`current/claude-harbor/proxy/`) — MCP handshake, WS handshake + bound ack, inbound forwarding to `notifications/claude/channel`, outbound `reply` tool -> `POST /channel/reply`. Server-side adds: `POST /channel/reply` endpoint, `insertMessage` on Db, `channel_token` in bound-ack frame. Reviews: code ✅ sec ✅ func ✅. Final: 29 server tests, 30 proxy tests, tsc clean. Hardening: inbound content/meta caps + control-char strip, token redaction in logs, constant-time token compare, HARBOR_URL scheme allowlist, stdin line cap (1 MiB), reconnect rate cap. Follow-up: `correlate.ts:78` still logs 8-char token prefix on ws-bind-refused — P1 cleanup.
 
 ## Next Steps
-- [ ] P0.2: `claude-harbor-ch` stdio MCP proxy — connects to remote, forwards notifications + reply
 - [ ] P0.3: `claude-harbor` CLI wrapper — `claude-harbor start [args]` → exec claude with channels
 - [ ] P0.4: Install script — writes `~/.claude/settings.json` hooks + statusline + channel plugin; idempotent; includes uninstall
 
@@ -63,9 +63,9 @@ YES — `docs/DESIGN.md`. All UI changes must follow the Mistral warm palette (i
 - **DESIGN.md is authoritative for UI** — Mistral warm palette, no cool colors, weight 400 only, sharp corners.
 
 ## Next Agent Prompt
-Kick off P0.2 — claude-harbor-ch stdio MCP proxy.
+Kick off P0.3 — claude-harbor CLI wrapper.
 
-> You are implementing Phase P0.2 of claude-harbor. The remote server is live at `current/claude-harbor/server/` (see its README). Build a stdio MCP server binary at `current/claude-harbor/proxy/` (Bun single-file) that CC spawns as a channel plugin. Read PLAN sections 2–4 and CHANNELS-REFERENCE.md for exact channel MCP frame shapes. The proxy must: (1) speak MCP stdio to CC, (2) open a WebSocket to the remote `/channel`, (3) send handshake `{parent_pid: process.ppid, cwd: process.cwd(), ts}`, (4) forward inbound admin-push frames to CC as `notifications/claude/channel`, (5) forward CC `reply` tool calls upstream via a new remote endpoint (you will add `POST /channel/reply` on the server side). Tests with `bun:test`: handshake success, inbound forwarding, reply forwarding, graceful shutdown on stdin EOF. NO install script, NO CLI wrapper yet.
+> You are implementing Phase P0.3 of claude-harbor. Build a small Bun single-file CLI at `current/claude-harbor/wrapper/` that exposes a `claude-harbor` binary. Command: `claude-harbor start [...args]` — exec the real `claude` binary with the channels plugin activated. Need to: discover the user's `claude` executable via PATH (or `CLAUDE_BIN` env override), pass through all args verbatim, and ensure the channels plugin `claude-harbor-ch` (from `current/claude-harbor/proxy/`) is wired via `claude --channels=plugin:claude-harbor@local` flag (confirm exact flag name via CHANNELS-REFERENCE.md). Also support `claude-harbor --version` and `claude-harbor --help`. Do NOT modify `~/.claude/` from runtime — that's P0.4's install script's job. Tests: version, help, arg passthrough (spawn `echo` as fake `claude`), missing-claude error handling. Keep files <400 lines. No install script, no frontend yet.
 
 ## Orchestrator Rules (for future sessions)
 On restart, still follow:
