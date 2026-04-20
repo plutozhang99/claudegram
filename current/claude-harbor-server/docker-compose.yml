@@ -1,0 +1,18 @@
+services:
+  harbor:
+    build: .
+    image: claude-harbor-server:latest
+    container_name: claude-harbor
+    restart: unless-stopped
+    ports:
+      - "${HARBOR_HOST_PORT:-7823}:7823"
+    environment:
+      HARBOR_PORT: 7823
+      HARBOR_DB_PATH: /app/data/harbor.db
+      HARBOR_ADMIN_TOKEN: ${HARBOR_ADMIN_TOKEN:?set HARBOR_ADMIN_TOKEN in .env or shell}
+      HARBOR_CORR_WINDOW_MS: ${HARBOR_CORR_WINDOW_MS:-10000}
+    volumes:
+      - harbor-data:/app/data
+
+volumes:
+  harbor-data:
