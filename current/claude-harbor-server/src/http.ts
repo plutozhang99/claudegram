@@ -3,11 +3,10 @@
  * Every endpoint validates input and returns a typed JSON envelope.
  */
 
-import { timingSafeEqual } from "node:crypto";
 import type { Server } from "bun";
 import type { Db, StatuslineSnapshot } from "./db.ts";
-import { registerPending, pushToSession, type WsData } from "./correlate.ts";
-import { log, loadConfig } from "./config.ts";
+import { registerPending, type WsData } from "./correlate.ts";
+import { log } from "./config.ts";
 import {
   MAX_BODY_BYTES,
   asNumber,
@@ -16,11 +15,17 @@ import {
   freshToken,
   isTooLarge,
   jsonResponse,
-  noContent,
   readJson,
+  requireJsonContentTypeIfPresent,
   shortId,
   stripControlChars,
 } from "./http-utils.ts";
+import {
+  checkAdminAuth,
+  handleAdminAccountHint,
+  handleAdminPush,
+  handleAdminSession,
+} from "./http-admin.ts";
 import { handleChannelReply } from "./http-reply.ts";
 import {
   handleNotification,
@@ -30,6 +35,10 @@ import {
   handleStop,
   handleUserPromptSubmit,
 } from "./http-hooks.ts";
+import { tryHandleSessions } from "./http-sessions.ts";
+import { extractStatuslineBroadcast, getBus } from "./event-bus.ts";
+import { toPublicSessionRow } from "./db-queries.ts";
+import type { StaticServer } from "./http-static.ts";
 
 export { MAX_BODY_BYTES };
 
@@ -83,6 +92,11 @@ async function handleSessionStart(req: Request, db: Db): Promise<Response> {
     pid,
     cwd: stripControlChars(cwd),
     transcript_path: transcript_path ? stripControlChars(transcript_path) : null,
+  });
+  getBus().emit({
+    type: "session.created",
+    session_id,
+    session: toPublicSessionRow(row),
   });
   return jsonResponse({ channel_token: row.channel_token });
 }
@@ -143,6 +157,8 @@ function extractStatusline(b: Record<string, unknown>): {
 }
 
 async function handleStatusline(req: Request, db: Db): Promise<Response> {
+  const badCt = requireJsonContentTypeIfPresent(req);
+  if (badCt) return badCt;
   const body = await readJson(req);
   if (isTooLarge(body)) return err(413, "payload too large");
   if (!body || typeof body !== "object") return err(400, "invalid json");
@@ -164,6 +180,18 @@ async function handleStatusline(req: Request, db: Db): Promise<Response> {
       log.warn("statusline: session_id not found", {
         session_id: shortId(sessionId),
       });
+    } else if (updated) {
+      const bus = getBus();
+      bus.emit({
+        type: "statusline.updated",
+        session_id: updated.session_id,
+        statusline: extractStatuslineBroadcast(updated),
+      });
+      bus.emit({
+        type: "session.updated",
+        session_id: updated.session_id,
+        session: toPublicSessionRow(updated),
+      });
     }
   } else {
     log.warn("statusline: no matching session", {
@@ -173,147 +201,110 @@ async function handleStatusline(req: Request, db: Db): Promise<Response> {
   return jsonResponse({ line: parsed.line, matched });
 }
 
-// --- admin gating -------------------------------------------------------
+// --- CORS (dev-mode only on GET) ---------------------------------------
 
-function constantTimeEqual(a: string, b: string): boolean {
-  const ab = Buffer.from(a);
-  const bb = Buffer.from(b);
-  if (ab.length !== bb.length) return false;
-  return timingSafeEqual(ab, bb);
-}
-
-function isLoopbackIp(ip: string | null | undefined): boolean {
-  if (!ip) return false;
-  return (
-    ip === "127.0.0.1" ||
-    ip === "::1" ||
-    ip === "::ffff:127.0.0.1" ||
-    ip.startsWith("127.")
-  );
+/**
+ * Whether permissive CORS should be applied on this response. Activated
+ * only when `HARBOR_DEV=1` AND the server is bound to loopback. Never
+ * applied to POST responses (per P2 spec — writes stay same-origin).
+ */
+export function corsEnabled(bind: string): boolean {
+  if (process.env.HARBOR_DEV !== "1") return false;
+  return bind === "127.0.0.1" || bind === "::1" || bind === "localhost";
 }
 
 /**
- * Admin routes are gated two ways:
- *  - If `HARBOR_ADMIN_TOKEN` env is set: require header
- *    `X-Harbor-Admin-Token` to match (constant-time compare). 401 on miss.
- *  - If unset: only allow requests whose remote IP is loopback. 403 on miss.
- *
- * Returns `null` when the request is authorized, or a Response to return.
+ * Resolve the dev CORS origin. Prefer `HARBOR_DEV_ORIGIN_PORT` (defaults to
+ * Flutter web dev server on 63595); fall back to 8080 when unset.
+ * Admin tokens are never advertised in `Access-Control-Allow-Headers` —
+ * browser-side Flutter never carries that header.
  */
-function checkAdminAuth(req: Request, server: Server<WsData> | null): Response | null {
-  const cfg = loadConfig();
-  if (cfg.adminToken) {
-    const got = req.headers.get("x-harbor-admin-token") ?? "";
-    if (!got || !constantTimeEqual(got, cfg.adminToken)) {
-      return err(401, "unauthorized");
-    }
-    return null;
-  }
-  // No token configured → loopback-only.
-  const ip = server ? server.requestIP(req)?.address ?? null : null;
-  if (!isLoopbackIp(ip)) {
-    return err(403, "forbidden: admin routes restricted to loopback");
-  }
-  return null;
+function devOriginHeaders(): Record<string, string> {
+  const rawPort = process.env.HARBOR_DEV_ORIGIN_PORT;
+  // If env is set and valid, echo that port; else fall back to 8080.
+  const origin =
+    rawPort && /^\d+$/.test(rawPort)
+      ? `http://localhost:${rawPort}`
+      : "http://localhost:8080";
+  return {
+    "access-control-allow-origin": origin,
+    "access-control-allow-methods": "GET, OPTIONS",
+    "access-control-allow-headers": "content-type",
+    "access-control-max-age": "600",
+    vary: "Origin",
+  };
 }
 
-// --- /admin/push-message ------------------------------------------------
-
-async function handleAdminPush(
-  req: Request,
-  db: Db,
-  server: Server<WsData> | null,
-): Promise<Response> {
-  const denied = checkAdminAuth(req, server);
-  if (denied) return denied;
-
-  const body = await readJson(req);
-  if (isTooLarge(body)) return err(413, "payload too large");
-  if (!body || typeof body !== "object") return err(400, "invalid json");
-  const b = body as Record<string, unknown>;
-  const session_id = asString(b.session_id);
-  const content = asString(b.content);
-  const metaRaw = b.meta;
-  if (!session_id || !content) {
-    return err(400, "missing session_id or content");
+function applyCorsHeaders(res: Response): Response {
+  for (const [k, v] of Object.entries(devOriginHeaders())) {
+    res.headers.set(k, v);
   }
-  let meta: Record<string, string> | undefined;
-  if (metaRaw && typeof metaRaw === "object" && !Array.isArray(metaRaw)) {
-    meta = {};
-    for (const [k, v] of Object.entries(metaRaw as Record<string, unknown>)) {
-      if (typeof v === "string") meta[k] = v;
-    }
-  }
-  const delivered = pushToSession(db, session_id, content, meta);
-  return jsonResponse({ ok: true, delivered });
+  return res;
 }
 
-// --- /admin/account-hint ------------------------------------------------
+/** Export for testing so we don't re-resolve from process.env in tests. */
+export { devOriginHeaders };
 
-/** Max raw byte length for an account_hint string. */
-const MAX_ACCOUNT_HINT_CHARS = 512;
+// --- expose admin auth for ws-subscribe upgrade path -------------------
 
-async function handleAdminAccountHint(
+/**
+ * Re-exported wrapper so `ws-subscribe` can reuse the same gate without
+ * importing the private `checkAdminAuth` symbol.
+ */
+export function adminAuthGate(
   req: Request,
-  db: Db,
   server: Server<WsData> | null,
-): Promise<Response> {
-  const denied = checkAdminAuth(req, server);
-  if (denied) return denied;
-
-  const body = await readJson(req);
-  if (isTooLarge(body)) return err(413, "payload too large");
-  if (!body || typeof body !== "object" || Array.isArray(body)) {
-    return err(400, "invalid json");
-  }
-  const b = body as Record<string, unknown>;
-  if (!("account_hint" in b)) {
-    return err(400, "missing account_hint");
-  }
-  const raw = b.account_hint;
-  let hint: string | null;
-  if (raw === null) {
-    hint = null;
-  } else if (typeof raw === "string") {
-    if (raw.length > MAX_ACCOUNT_HINT_CHARS) {
-      return err(400, "account_hint too long");
-    }
-    const cleaned = stripControlChars(raw).trim();
-    hint = cleaned.length > 0 ? cleaned : null;
-  } else {
-    return err(400, "account_hint must be string or null");
-  }
-  db.setAccountHint(hint);
-  log.info("admin: account_hint updated", { set: hint !== null });
-  return noContent();
-}
-
-// --- /admin/session/:id (debug) -----------------------------------------
-
-function handleAdminSession(
-  req: Request,
-  db: Db,
-  server: Server<WsData> | null,
-  session_id: string,
-): Response {
-  const denied = checkAdminAuth(req, server);
-  if (denied) return denied;
-  const row = db.getSessionById(session_id);
-  if (!row) return err(404, "not found");
-  return jsonResponse({ ok: true, session: row });
+): Response | null {
+  return checkAdminAuth(req, server);
 }
 
 // --- Router --------------------------------------------------------------
+
+export interface HandleHttpOptions {
+  /** If set, handles SPA / static serving under `/`. */
+  staticServer?: StaticServer | null;
+  /** If set, the resolved bind host — used for CORS gating. */
+  bind?: string | null;
+}
 
 export async function handleHttp(
   req: Request,
   db: Db,
   server: Server<WsData> | null = null,
+  opts: HandleHttpOptions = {},
 ): Promise<Response> {
   const url = new URL(req.url);
   const path = url.pathname;
   const method = req.method;
+  const bind = opts.bind ?? null;
+  const cors = bind ? corsEnabled(bind) : false;
 
+  // OPTIONS preflight: only 204 + permissive headers when CORS is enabled.
+  if (method === "OPTIONS") {
+    if (cors) {
+      const res = new Response(null, { status: 204 });
+      applyCorsHeaders(res);
+      return res;
+    }
+    return err(405, "method not allowed");
+  }
+
+  // Route dispatch --------------------------------------------------------
+  const res = await dispatch(req, db, server, method, path, opts);
+  // CORS is applied to GETs ONLY (and only when dev+loopback). Never to
+  // POST, WS upgrades, or static fallback that happened at this layer.
+  if (cors && method === "GET") applyCorsHeaders(res);
+  return res;
+}
+
+async function dispatch(
+  req: Request,
+  db: Db,
+  server: Server<WsData> | null,
+  method: string,
+  path: string,
+  opts: HandleHttpOptions,
+): Promise<Response> {
   if (method === "POST" && path === "/hooks/session-start") {
     return handleSessionStart(req, db);
   }
@@ -355,5 +346,16 @@ export async function handleHttp(
   if (method === "GET" && path === "/health") {
     return jsonResponse({ ok: true, ts: Date.now() });
   }
+
+  // P2 frontend REST.
+  const sessRes = tryHandleSessions(req, db);
+  if (sessRes) return sessRes;
+
+  // Static / SPA fallback.
+  if (opts.staticServer) {
+    const sres = await opts.staticServer.handle(req);
+    if (sres) return sres;
+  }
+
   return err(404, "not found");
 }

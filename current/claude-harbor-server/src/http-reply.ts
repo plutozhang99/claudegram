@@ -17,7 +17,10 @@ import {
   isTooLarge,
   jsonResponse,
   readJson,
+  requireJsonContentTypeIfPresent,
 } from "./http-utils.ts";
+import { getBus } from "./event-bus.ts";
+import { getMessageById } from "./db-queries.ts";
 
 /** Max entries / key length / value bytes for reply meta dictionaries. */
 const REPLY_META_MAX_ENTRIES = 16;
@@ -101,6 +104,8 @@ export async function handleChannelReply(
   req: Request,
   db: Db,
 ): Promise<Response> {
+  const badCt = requireJsonContentTypeIfPresent(req);
+  if (badCt) return badCt;
   const body = await readJson(req);
   if (isTooLarge(body)) return err(413, "payload too large");
   if (!body || typeof body !== "object") return err(400, "invalid json");
@@ -129,5 +134,13 @@ export async function handleChannelReply(
     meta: metaResult.meta,
     created_at: Date.now(),
   });
+  const msgRow = getMessageById(db, id, row.session_id);
+  if (msgRow) {
+    getBus().emit({
+      type: "message.created",
+      session_id: row.session_id,
+      message: msgRow,
+    });
+  }
   return jsonResponse({ ok: true, id });
 }

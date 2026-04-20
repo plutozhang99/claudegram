@@ -10,6 +10,8 @@ import type { Db, SessionRow } from "./db.ts";
 import { corrWindowMs, log } from "./config.ts";
 
 export interface WsData {
+  /** Tag so we can route multi-path WebSockets via a single handler. */
+  kind?: "channel";
   /** Populated after successful handshake + correlation. */
   channel_token?: string;
   session_id?: string;
@@ -34,7 +36,30 @@ interface PendingSession {
 const pending = new Map<string, PendingSession>(); // key: session_id
 const bound = new Map<string, HarborWs>(); // key: channel_token
 
+/**
+ * Hard cap on the size of `pending`. Prevents a misbehaving client from
+ * registering SessionStart faster than the correlation window can expire
+ * entries. When full we evict the oldest entry (Map iteration order is
+ * insertion order) and warn.
+ */
+export const PENDING_MAX_ENTRIES = 1000;
+
 export function registerPending(session: PendingSession): void {
+  if (
+    pending.size >= PENDING_MAX_ENTRIES &&
+    !pending.has(session.session_id)
+  ) {
+    // Evict the oldest entry (first insertion). Map iteration is
+    // insertion-ordered, so the first key is the oldest.
+    const oldest = pending.keys().next().value;
+    if (typeof oldest === "string") {
+      pending.delete(oldest);
+      log.warn("pending cap reached, evicted oldest", {
+        evicted_session_id: oldest,
+        cap: PENDING_MAX_ENTRIES,
+      });
+    }
+  }
   pending.set(session.session_id, session);
   // Auto-expire from pending queue after window (kept in DB though).
   setTimeout(() => pending.delete(session.session_id), corrWindowMs()).unref?.();

@@ -190,3 +190,21 @@ export function freshToken(): string {
 export function shortId(id: string): string {
   return id.length <= 8 ? id : `${id.slice(0, 8)}…`;
 }
+
+/**
+ * Content-type gate used by endpoints that accept JSON only. Soft form:
+ * if the header is absent, accept the request (backwards compatible with
+ * callers that don't set content-type). If the header is present and is
+ * anything other than `application/json` (optionally with parameters),
+ * reject with 400.
+ */
+export function requireJsonContentTypeIfPresent(
+  req: Request,
+): Response | null {
+  const ct = req.headers.get("content-type");
+  if (ct === null || ct === "") return null;
+  if (!/^application\/json\b/i.test(ct)) {
+    return err(400, "content-type must be application/json");
+  }
+  return null;
+}

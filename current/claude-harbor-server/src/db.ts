@@ -40,6 +40,40 @@ export interface SessionRow {
   status: string;
 }
 
+/** Row shape for `messages` — mirrors schema.sql. */
+export interface MessageRow {
+  id: number;
+  session_id: string | null;
+  direction: string | null;
+  content: string | null;
+  meta_json: string | null;
+  created_at: number | null;
+}
+
+/** Allowed `status` query values for `listSessions`. */
+export type SessionListStatus =
+  | "active"
+  | "idle"
+  | "ended"
+  | "unbound"
+  | "all";
+
+export interface ListSessionsArgs {
+  status: SessionListStatus;
+  limit: number;
+  offset: number;
+}
+
+export interface SessionCounts {
+  messages: number;
+  tool_events: number;
+}
+
+export interface SessionWithCounts {
+  session: SessionRow;
+  counts: SessionCounts;
+}
+
 export interface StatuslineSnapshot {
   model_id: string | null;
   model_display: string | null;

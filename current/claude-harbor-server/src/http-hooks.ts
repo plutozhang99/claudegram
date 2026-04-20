@@ -18,6 +18,8 @@
 import { log } from "./config.ts";
 import type { Db } from "./db.ts";
 import { validateHookPayload } from "./schema.ts";
+import { getBus } from "./event-bus.ts";
+import { getMessageById } from "./db-queries.ts";
 import {
   asString,
   err,
@@ -105,13 +107,22 @@ export async function handleUserPromptSubmit(
   const rawText = promptField ?? messageField ?? "";
   const content = stripControlChars(rawText);
 
-  db.insertMessage({
+  const id = db.insertMessage({
     session_id: parsed.session_id,
     direction: "inbound",
     content,
     metaJson: safeStringify(parsed.raw),
     created_at: Date.now(),
   });
+
+  const row = getMessageById(db, id, parsed.session_id);
+  if (row) {
+    getBus().emit({
+      type: "message.created",
+      session_id: parsed.session_id,
+      message: row,
+    });
+  }
 
   log.info("hook: user-prompt-submit", {
     session_id: shortId(parsed.session_id),
@@ -250,6 +261,8 @@ export async function handleSessionEnd(
 
   const ok = db.markSessionEnded(parsed.session_id, Date.now(), reason);
   if (!ok) return err(404, "unknown session_id");
+
+  getBus().emit({ type: "session.ended", session_id: parsed.session_id });
 
   log.info("hook: session-end", {
     session_id: shortId(parsed.session_id),
