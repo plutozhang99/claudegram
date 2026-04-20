@@ -42,16 +42,14 @@ YES — `docs/DESIGN.md`. All UI changes must follow the Mistral warm palette (i
 - Architecture (phase boundaries): architect
 
 ## What's Done
-- [x] V1 archival — `current/claudegram/` + `current/fakechat/` + root `README.md` + `docs/request_v1.md` moved to `legacy/V1-claudegram-2026-04-19/` (commit pending)
-- [x] New skeleton `current/claude-harbor/` created
+- [x] V1 archival — commit 7d95aca
+- [x] New skeleton `current/claude-harbor/` scaffolded
 - [x] PLAN-claude-harbor.md written
 - [x] PROGRESS.md rewritten
+- [x] Remote set to `git@github.com-self:plutozhang99/claude-harbor.git`
+- [x] **P0.1** Remote Bun server — HTTP `/hooks/session-start`, `/statusline`, `/admin/push-message`, WS `/channel`, SQLite. 19 tests pass, tsc clean. Reviews: code ✅ sec ✅ func ✅ (P1 hardening flagged: auth+TLS per spec scope)
 
 ## Next Steps
-- [ ] Rename GitHub repo `plutozhang99/claudegram` → `plutozhang99/claude-harbor` (gh repo rename)
-- [ ] Update local `git remote set-url origin`
-- [ ] Rename local dir `~/Documents/claudegram` → `~/Documents/claude-harbor` (LAST — user reopens CC from new path)
-- [ ] P0.1: Remote Bun server skeleton — HTTP `/hooks/session-start`, `/statusline`, WS `/channel`, SQLite bootstrap
 - [ ] P0.2: `claude-harbor-ch` stdio MCP proxy — connects to remote, forwards notifications + reply
 - [ ] P0.3: `claude-harbor` CLI wrapper — `claude-harbor start [args]` → exec claude with channels
 - [ ] P0.4: Install script — writes `~/.claude/settings.json` hooks + statusline + channel plugin; idempotent; includes uninstall
@@ -65,19 +63,9 @@ YES — `docs/DESIGN.md`. All UI changes must follow the Mistral warm palette (i
 - **DESIGN.md is authoritative for UI** — Mistral warm palette, no cool colors, weight 400 only, sharp corners.
 
 ## Next Agent Prompt
-Kick off P0.1 remote server skeleton. Prompt:
+Kick off P0.2 — claude-harbor-ch stdio MCP proxy.
 
-> You are implementing Phase P0.1 of claude-harbor. Read `docs/plans/PLAN-claude-harbor.md` sections 2, 3, 4, 5, 8 first. Build a minimal Bun + TypeScript remote server in `current/claude-harbor/server/`:
->
-> - HTTP endpoints: `POST /hooks/session-start` (accepts `{session_id, cwd, pid, transcript_path, ts}`, creates session row, returns `{channel_token}`), `POST /statusline` (accepts full statusline stdin JSON, persists snapshot, returns `{line}` to echo back).
-> - WS endpoint: `/channel` (handshake `{parent_pid, cwd, ts}`, correlates to pending session by `cwd+pid` match within 10s window, binds channel socket to session).
-> - SQLite bootstrap per schema in PLAN §8 using `bun:sqlite`.
-> - One inbound-message test: POST /admin/push-message `{session_id, content}` — sends a channel notification to the matched WS (next phase will wire to real CC).
-> - Tests using `bun:test`: session-start creates row; statusline persists; WS correlation succeeds; WS correlation times out when no match.
-> - NO auth, NO HTTPS yet (internal net only). NO Web Push yet.
-> - Keep files <400 lines each. File layout: `server/src/{http.ts, ws.ts, db.ts, correlate.ts, index.ts}`, tests alongside.
->
-> Use the typescript-patterns and bun-runtime skills. Do not implement hook binaries, proxy, or wrapper in this phase — just the server. Verify with `bun test` before reporting done.
+> You are implementing Phase P0.2 of claude-harbor. The remote server is live at `current/claude-harbor/server/` (see its README). Build a stdio MCP server binary at `current/claude-harbor/proxy/` (Bun single-file) that CC spawns as a channel plugin. Read PLAN sections 2–4 and CHANNELS-REFERENCE.md for exact channel MCP frame shapes. The proxy must: (1) speak MCP stdio to CC, (2) open a WebSocket to the remote `/channel`, (3) send handshake `{parent_pid: process.ppid, cwd: process.cwd(), ts}`, (4) forward inbound admin-push frames to CC as `notifications/claude/channel`, (5) forward CC `reply` tool calls upstream via a new remote endpoint (you will add `POST /channel/reply` on the server side). Tests with `bun:test`: handshake success, inbound forwarding, reply forwarding, graceful shutdown on stdin EOF. NO install script, NO CLI wrapper yet.
 
 ## Orchestrator Rules (for future sessions)
 On restart, still follow:
