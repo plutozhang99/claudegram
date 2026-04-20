@@ -30,8 +30,8 @@ flutter pub get
 echo "[build-frontend] flutter build web --release"
 # Flutter 3.41+ infers the renderer per-platform; --web-renderer was
 # removed. We pass --base-href=/ for same-origin serving under the Bun
-# server's root.
-flutter build web --release --base-href /
+# server's root. --no-web-resources-cdn pins CanvasKit to same-origin (CSP).
+flutter build web --release --base-href / --no-web-resources-cdn
 
 if [ ! -f "${BUILD_OUT}/index.html" ]; then
   echo "error: build output missing: ${BUILD_OUT}/index.html" >&2
